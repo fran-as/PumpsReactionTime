@@ -1,7 +1,7 @@
-TAG,driver_series,driver_od_in,driver_grooves,driver_bushing,driver_shaft_mm,driven_series,driven_od_in,driven_grooves,driven_bushing,driven_shaft_mm
-4210-PU-003,5V,7.5,3,J,75,5V,23.6,5,M,100
-4220-PU-010,8V,18.0,8,A2,100,8V,44.5,8,A2,100
-4230-PU-011,8V,14.0,10,J,75,8V,35.5,10,M,100
-4230-PU-015,5V,10.9,8,J,60,5V,37.5,8,M,90
-4230-PU-022,5V,10.9,8,J,60,5V,37.5,8,M,90
-4230-PU-031,5V,16.0,8,J,75,5V,37.5,8,M,100
+TAG,driver_series,driver_od_in,driver_grooves,driver_bushing,driver_shaft_mm,driven_series,driven_od_in,driven_grooves,driven_bushing,driven_shaft_mm,driver_weight_lb,driver_weight_lb
+4210-PU-003,5V,7.5,5,J,60,5V,23.6,5,M,100,20.8,111.9
+4220-PU-010,8V,16.0,8,J,100,8V,44.5,8,P,100,164.5,860
+4230-PU-011,8V,14.0,10,J,75,8V,35.5,10,P,100,245.8,837
+4230-PU-015,5V,10.9,6,E,60,5V,37.5,6,J,100,67.1,349.6
+4230-PU-022,5V,10.9,6,E,60,5V,37.5,6,J,100,67.1,349.6
+4230-PU-031,5V,16.0,8,J,75,5V,37.5,8,M,100,109,398.5

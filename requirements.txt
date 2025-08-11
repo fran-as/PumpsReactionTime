@@ -1,9 +1,4 @@
-# Requisitos mínimos para v3 (sin gráficos Matplotlib ni parseo de PDFs)
 streamlit>=1.32
 pandas>=2.0
 numpy>=1.25
-
-# --- Opcionales (descomenta si los usas) ---
-# matplotlib>=3.7    # Si vuelves a activar gráficos Δn–t (v2)
-# pdfplumber>=0.11.0 # Si integras importador automático desde PDFs (Summary/TB Woods)
-# openpyxl>=3.1      # Si quieres cargar .xlsx directamente en la app
+pdfplumber>=0.11.0
