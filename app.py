@@ -2,324 +2,152 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import math
-from io import StringIO
-import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Tiempo de reacción bombas con VDF", layout="wide")
+st.set_page_config(page_title="Tiempo de reacción bombas con VDF – v3", layout="wide")
 
-# -------------------------------
-# Helpers de cálculo
-# -------------------------------
+G = 9.80665
+
 def inertia_disc_ring(mass_kg, D_mm):
     R = (D_mm/1000.0)/2.0
     J_disc = 0.5 * mass_kg * (R**2)
     J_ring = 1.0 * mass_kg * (R**2)
     return J_disc, J_ring
 
-def fit_system_curve(points_df):
-    """
-    Ajusta H = H0 + K * Q^2.
-    Acepta Q en m3/h o m3/s (detecta por magnitud).
-    Devuelve H0 [m] y K_SI con Q en m3/s.
-    """
-    dfp = points_df.dropna()
-    if {"Q","H"}.difference(dfp.columns):
-        raise ValueError("Se requieren columnas 'Q' y 'H'.")
-    Q = dfp["Q"].astype(float).to_numpy()
-    H = dfp["H"].astype(float).to_numpy()
-    if Q.max() > 200:  # umbral simple para detectar m3/h
-        Qs = Q / 3600.0  # m3/s
-    else:
-        Qs = Q
-    X = np.vstack([np.ones_like(Qs), Qs**2]).T  # [1, Q^2]
-    beta, _, _, _ = np.linalg.lstsq(X, H, rcond=None)
-    H0, K_SI = beta[0], beta[1]
-    return float(H0), float(K_SI)
-
-def tload_from_system(n_rpm, Qref_m3h, H0, K_SI, nref_rpm, eta=0.65, SG=1.0):
-    """
-    T_load(n) con H = H0 + K * Q^2 y Q ≈ alpha * n.
-    Devuelve torque [N·m] equivalente en el eje del motor.
-    """
-    rho = 1000.0 * SG
-    g = 9.81
-    alpha = (Qref_m3h / 3600.0) / max(nref_rpm, 1e-6)  # (m3/s) / rpm
-    A = rho * g * alpha * (60.0/(2.0*math.pi)) / max(eta,1e-6)  # N·m/m
+def tload_system_from_params(n_rpm, Qref_m3h, H0, K, nref_rpm, SG, eta):
+    rho = 1000.0*SG
+    alpha = (Qref_m3h/3600.0)/max(nref_rpm,1e-6)
     n = np.array(n_rpm, dtype=float)
-    return A * (H0 + K_SI * (alpha**2) * (n**2))
+    Qs = alpha * n
+    H = H0 + K * (Qs**2)
+    Ph = rho*G*Qs*H / max(eta,1e-6)
+    omega = (2.0*math.pi/60.0)*n
+    return Ph / np.maximum(omega,1e-6)
 
-def compute_results(df, motors_by_tag, ramp_motor_rpm_s=300.0, overload_pu=1.0,
-                    inertia_model="range", sys_model_by_tag=None):
-    rows = []
-    for _, r in df.iterrows():
-        tag = r["TAG"]
-        m = motors_by_tag.get(tag, {})
-        T_nom = float(m.get("T_nom", np.nan))
-        Jm    = float(m.get("Jm", np.nan))
-        if np.isnan(T_nom) or np.isnan(Jm):
-            rows.append({"TAG": tag, "status":"Falta T_nom/Jm"})
-            continue
+def compute_Jeq_motor_side(r, Jm, J_imp, J_driver, J_driven, J_fluid=0.0):
+    return Jm + J_driver + (r**2)*(J_imp + J_driven + J_fluid)
 
-        P_eff = float(r["P_eff [kW]"])
-        n_motor_min = float(r["n_motor_min [rpm]"])
-        n_motor_max = float(r["n_motor_max [rpm]"])
-        n_ref = n_motor_max
-        omega_ref = 2*math.pi*(n_ref/60.0)
-        T_ref = (P_eff*1000.0)/max(omega_ref,1e-6)  # fallback afinidad
+def ring_J(m_kg, Ro_m, Ri_m=0.0):
+    return m_kg*(Ro_m**2 + Ri_m**2)/2.0
 
-        trans_r = float(r["r"])
-        D_mm = float(r["Ø_imp [mm]"])
-        M_imp = float(r["M_imp [kg]"])
-        Jp_disc, Jp_ring = inertia_disc_ring(M_imp, D_mm)
-        J_eq_disc = Jm + (trans_r**2)*Jp_disc
-        J_eq_ring = Jm + (trans_r**2)*Jp_ring
-
-        pump_accel_vfd = ramp_motor_rpm_s / trans_r
-        n_pump_min = float(r["n_pump_min [rpm]"])
-        n_pump_max = float(r["n_pump_max [rpm]"])
-        t_ramp_only = (n_pump_max - n_pump_min) / pump_accel_vfd if pump_accel_vfd>0 else np.inf
-
-        # --- Carga: sistema si hay datos; si no, afinidad ---
-        T_avail = overload_pu * T_nom
-        use_sys = sys_model_by_tag and (tag in sys_model_by_tag)
-        if use_sys:
-            H0, K_SI, Qref_m3h, Href_m, eta, SG = sys_model_by_tag[tag]
-            def Tload(nrpm): return tload_from_system(nrpm, Qref_m3h, H0, K_SI, n_ref, eta=eta, SG=SG)
-        else:
-            def Tload(nrpm): return T_ref * (nrpm/n_ref)**2
-
-        def integrate_time(J_eq):
-            t = 0.0
-            steps = 600
-            dn = (n_motor_max - n_motor_min)/steps
-            for i in range(steps):
-                n_mid = n_motor_min + (i+0.5)*dn
-                T_load_mid = Tload(n_mid)
-                torque_margin = T_avail - T_load_mid
-                if torque_margin <= 0.0:
-                    return np.inf
-                alpha = torque_margin / J_eq  # rad/s^2
-                accel_rpm_s_torque = (60.0/(2.0*math.pi))*alpha
-                accel_rpm_s = min(accel_rpm_s_torque, ramp_motor_rpm_s)
-                if accel_rpm_s <= 0:
-                    return np.inf
-                t += dn / accel_rpm_s
-            return t
-
-        t_disc = integrate_time(J_eq_disc)
-        t_ring = integrate_time(J_eq_ring)
-
-        if inertia_model == "disc":
-            t_final = max(t_ramp_only, t_disc)
-            rows.append({"TAG": tag, "modelo":"sistema" if use_sys else "afinidad",
-                         "Pump accel VFD-only [rpm/s]": pump_accel_vfd,
-                         "t_ramp_only [s]": t_ramp_only,
-                         "t_disc [s]": t_disc, "t_final [s]": t_final})
-        elif inertia_model == "ring":
-            t_final = max(t_ramp_only, t_ring)
-            rows.append({"TAG": tag, "modelo":"sistema" if use_sys else "afinidad",
-                         "Pump accel VFD-only [rpm/s]": pump_accel_vfd,
-                         "t_ramp_only [s]": t_ramp_only,
-                         "t_ring [s]": t_ring, "t_final [s]": t_final})
-        else:
-            rows.append({"TAG": tag, "modelo":"sistema" if use_sys else "afinidad",
-                         "Pump accel VFD-only [rpm/s]": pump_accel_vfd,
-                         "t_ramp_only [s]": t_ramp_only,
-                         "t_disc [s]": t_disc, "t_ring [s]": t_ring,
-                         "t_final_min [s]": max(t_ramp_only, t_disc),
-                         "t_final_max [s]": max(t_ramp_only, t_ring)})
-    return pd.DataFrame(rows)
-
-# ---------------------------------
-# Datos por defecto (tabla + motor)
-# ---------------------------------
-default_table = pd.DataFrame([
-    ("ROUGHER CONCENTRATE PUMP", "4210-PU-003", 37, 32.2, 4, 1475, 738, 3.15, 469, 234, 600.0, 228.7),
-    ("REGRIND CYCLONE FEED PUMP", "4220-PU-010", 200, 173.9, 6, 990, 495, 2.47, 400, 200, 1000.0, 816.2),
-    ("CLEANER 2 FEED PUMP", "4230-PU-011", 200, 173.9, 4, 1490, 745, 2.54, 588, 294, 750.0, 268.6),
-    ("CLEANER SCAVENGER CONCENTRATE PUMP", "4230-PU-015", 75, 65.2, 4, 1485, 743, 3.44, 432, 216, 750.0, 268.6),
-    ("CLEANER 2 TAILINGS PUMP", "4230-PU-022", 90, 78.3, 4, 1489, 745, 3.44, 433, 216, 750.0, 128.1),
-    ("CLEANER 2 SPARGER FEED PUMP 1", "4230-PU-023", 90, 78.3, 4, 1489, 745, 2.42, 615, 308, 600.0, 228.7),
-    ("CLEANER 2 SPARGER FEED PUMP 2", "4230-PU-024", 90, 78.3, 4, 1489, 745, 2.42, 615, 308, 600.0, 228.7),
-    ("CLEANER 3 FEED PUMP", "4230-PU-031", 110, 95.7, 4, 1489, 745, 2.34, 635, 318, 600.0, 228.7),
-], columns=["Application","TAG","P_inst [kW]","P_eff [kW]","Poles","n_motor_max [rpm]","n_motor_min [rpm]","r",
-            "n_pump_max [rpm]","n_pump_min [rpm]","Ø_imp [mm]","M_imp [kg]"])
-
-default_motors_by_tag = {
-    "4210-PU-003": {"T_nom": 240.0, "Jm": 0.5177, "n_nom": 1475},
-    "4220-PU-010": {"T_nom": 1930.0, "Jm": 11.0, "n_nom": 990},
-    "4230-PU-011": {"T_nom": 1282.0, "Jm": 4.43, "n_nom": 1490},
-    "4230-PU-015": {"T_nom": 482.0, "Jm": 1.64, "n_nom": 1485},
-    "4230-PU-022": {"T_nom": 577.0, "Jm": 2.57, "n_nom": 1489},
-    "4230-PU-023": {"T_nom": 577.0, "Jm": 2.57, "n_nom": 1489},
-    "4230-PU-024": {"T_nom": 577.0, "Jm": 2.57, "n_nom": 1489},
-    "4230-PU-031": {"T_nom": 706.0, "Jm": 2.57, "n_nom": 1489},
-}
-
-# -------------------------------
-# Sidebar – parámetros de modelo
-# -------------------------------
-st.sidebar.header("Parámetros de cálculo")
-ramp_motor = st.sidebar.number_input("Rampa VDF (rpm/s referidos al motor)", min_value=1.0, max_value=2000.0, value=300.0, step=10.0)
-overload_pu = st.sidebar.number_input("Sobrecarga de par (pu)", min_value=0.5, max_value=2.5, value=1.0, step=0.1)
-inertia_mode = st.sidebar.selectbox("Modelo de inercia del impulsor", options=["range", "disc", "ring"], index=0)
-
-st.sidebar.header("Datos de motores (editable)")
-motors_df = pd.DataFrame([{"TAG":k, **v} for k,v in default_motors_by_tag.items()])
-motors_df = st.sidebar.data_editor(motors_df, num_rows="dynamic", use_container_width=True)
-motors_by_tag = {row["TAG"]:{k:row[k] for k in row.index if k!="TAG"} for _, row in motors_df.iterrows()}
-
-# -------------------------------
-# Carga de datos
-# -------------------------------
-st.title("Tiempo de reacción de bombas con VDF – MantoVerde")
-st.caption("App de modelación (screening/modelo de sistema) para estimar tiempos de aceleración/deceleración.")
-
-uploaded = st.file_uploader("Carga una tabla CSV con las columnas mínimas (ver ejemplo). Si no, se usará el dataset por defecto.", type=["csv"])
-if uploaded is not None:
-    df = pd.read_csv(uploaded)
-else:
-    df = default_table.copy()
-
-st.subheader("Tabla de entradas (editable)")
-df = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-st.download_button("Descargar entradas CSV", df.to_csv(index=False).encode("utf-8"), "entradas_bombas.csv", "text/csv")
-
-# Calcular r desde poleas si existen
-with st.expander("Opcional: calcular r desde poleas"):
-    st.write("Si tu tabla tiene columnas de poleas, puedo calcular r automáticamente.")
-    st.caption("Columnas esperadas: 'DriveRSheave_in'/'DriveNSheave_in' o 'DriveRSheave_inch'/'DriveNSheave_inch'")
-    usar_r_auto = st.checkbox("Usar r calculada con poleas si están disponibles", value=True)
-    slip = st.number_input("Deslizamiento de correas (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.1)
-    posibles = [("DriveRSheave_in","DriveNSheave_in"),
-                ("DriveRSheave_inch","DriveNSheave_inch")]
-    r_auto_col = None
-    for c_drv, c_drn in posibles:
-        if c_drv in df.columns and c_drn in df.columns:
-            r_auto_col = (c_drv, c_drn)
-            break
-    if r_auto_col is not None:
-        c_drv, c_drn = r_auto_col
-        try:
-            df["r_auto"] = df[c_drn].astype(float) / df[c_drv].astype(float)
-            df["r_auto"] = df["r_auto"] * (1.0/(1.0 - slip/100.0))  # ajuste por slip
-            st.dataframe(df[["TAG","r","r_auto"]])
-            if usar_r_auto:
-                df["r"] = df["r_auto"]
-        except Exception as e:
-            st.warning(f"No se pudo calcular r_auto: {e}")
+def sheave_inertia(series, od_in, grooves, bushing_series=None, shaft_mm=None, weight_lb=None):
+    lb_to_kg = 0.45359237; inch_to_m = 0.0254
+    if weight_lb is not None:
+        m_kg = weight_lb*lb_to_kg
     else:
-        st.info("No se encontraron columnas de poleas. Mantengo r de la tabla.")
+        F_in = 3.0 + 0.5*max(0,grooves-2); t_in = 0.6; rho = 7200
+        Ro = (od_in*inch_to_m)/2.0; Ri = max(Ro - t_in*inch_to_m, 0.0)
+        vol = math.pi*(Ro**2 - Ri**2)*(F_in*inch_to_m)
+        m_kg = rho*vol
+    Ro = (od_in*inch_to_m)/2.0
+    return ring_J(m_kg, Ro), m_kg
 
-# -------------------------------
-# Curvas de sistema (opcional)
-# -------------------------------
-with st.expander("Curvas de sistema por TAG (opcional)"):
-    st.write("Pega puntos Q–H para ajustar H = H0 + K·Q² (puedes usar m³/h o m³/s).")
-    st.caption("Formato mínimo: columnas 'TAG','Q','H'. Puedes mezclar varios TAGs en la misma tabla.")
-    ejemplo = pd.DataFrame({
-        "TAG": ["4210-PU-003"]*3 + ["4230-PU-011"]*3,
-        "Q":   [200,400,600,  300,600,900],  # m3/h
-        "H":   [6.0,9.5,15.0, 10.0,16.0,25.0] # m
-    })
-    sys_points = pd.DataFrame(ejemplo)
-    sys_points = st.data_editor(sys_points, use_container_width=True, num_rows="dynamic")
-    st.download_button("Descargar ejemplo CSV", sys_points.to_csv(index=False).encode("utf-8"),
-                       "syscurve_points.csv", "text/csv")
+def integrate_time_motor(n1, n2, ramp_motor_rpm_s, J_eq, T_avail_fun, T_load_fun, steps=600):
+    t = 0.0; dn = (n2-n1)/steps
+    for i in range(steps):
+        n_mid = n1 + (i+0.5)*dn
+        Tm = max(T_avail_fun(n_mid) - T_load_fun(n_mid), 0.0)
+        alpha = Tm / max(J_eq,1e-9)
+        accel_rpm_s_torque = (60.0/(2.0*math.pi))*alpha
+        accel_rpm_s = min(accel_rpm_s_torque, ramp_motor_rpm_s)
+        if accel_rpm_s <= 0: return float('inf')
+        t += dn/accel_rpm_s
+    return t
 
-    st.write("Define duty por TAG (Q_ref,H_ref,eta,SG):")
-    duty_demo = pd.DataFrame({
-        "TAG": df["TAG"],
-        "Q_ref_m3h": [500]*len(df),
-        "H_ref_m":   [12]*len(df),
-        "eta":       [0.65]*len(df),
-        "SG":        [1.0]*len(df)
-    })
-    duty_tbl = st.data_editor(duty_demo, use_container_width=True, num_rows="dynamic")
+st.sidebar.header("Parámetros globales")
+ramp_motor = st.sidebar.number_input("Rampa VDF (rpm/s en motor)", 10.0, 5000.0, 300.0, 10.0)
+overload_pu = st.sidebar.number_input("Sobrecarga de par (pu)", 0.5, 3.0, 1.0, 0.1)
+torque_nominal_by_tag = st.sidebar.text_area("Par nominal por TAG (Nm) – JSON", value='{"4210-PU-003":240, "4220-PU-010":1930, "4230-PU-011":1282, "4230-PU-015":482, "4230-PU-022":577, "4230-PU-023":577, "4230-PU-024":577, "4230-PU-031":706}')
 
-# -------------------------------
-# Enfoque con LaTeX
-# -------------------------------
-st.markdown("### Enfoque seguido")
-st.latex(r"Q \propto n,\quad H \propto n^{2},\quad P \propto n^{3}\ \Rightarrow\ T_{\mathrm{load}} \propto n^{2}")
-st.latex(r"J_{\mathrm{eq}} = J_m + r^{2}\,J_p")
-st.latex(r"J_p^{\text{disco}}=\tfrac{1}{2} m R^{2},\qquad J_p^{\text{aro}}= m R^{2}")
-st.latex(r"a_{\text{VDF,bomba}}=\dfrac{\text{rampa}_{\text{motor}}}{r}")
-st.latex(r"a_{\text{par}}=\dfrac{T_{\text{avail}} - T_{\text{load}}(n)}{J_{\text{eq}}}")
-st.latex(r"t_{\text{final}}=\max\{\,t_{\text{rampa}},\ t_{\text{par/inercia}}\,\}")
+st.title("Tiempo de reacción – modelo con densidad, sistema e inercias de transmisión (v3)")
 
-st.markdown("### Supuestos")
-st.markdown("""
-- Zona de **par constante** hasta vel. nominal (sin debilitamiento de campo).  
-- **Sobrecarga de par** configurable (pu); límite real puede ser por VDF/corriente.  
-- Por ahora no se incluyen inercias de **acoples/poleas** ni **curva del sistema** salvo si se ingresa arriba.  
-- En **deceleración** podría requerirse **freno dinámico** para cumplir tiempos sin sobrevoltaje del bus DC.
-""")
+st.subheader("1) Dataset inicial (SG, espuma, viscosidad, duty, H0, K)")
+up_init = st.file_uploader("Sube initial_dataset.csv (o usa el que viene por defecto)", type=["csv"], key="init")
+if up_init: base_df = pd.read_csv(up_init)
+else: base_df = pd.read_csv("initial_dataset.csv")
+st.dataframe(base_df, use_container_width=True)
 
-# -------------------------------
-# Cálculo - construir sys_model_by_tag a partir de editores
-# -------------------------------
-sys_model_by_tag = {}
-if len(sys_points) > 1 and "TAG" in sys_points.columns:
-    for tag in sys_points["TAG"].unique():
-        pts = sys_points[sys_points["TAG"]==tag][["Q","H"]]
-        if len(pts) >= 2:
-            try:
-                H0, K_SI = fit_system_curve(pts)
-                duty_row = duty_tbl[duty_tbl["TAG"]==tag]
-                if not duty_row.empty:
-                    Qref = float(duty_row["Q_ref_m3h"].iloc[0])
-                    Href = float(duty_row["H_ref_m"].iloc[0])
-                    eta  = float(duty_row["eta"].iloc[0])
-                    SG   = float(duty_row["SG"].iloc[0])
-                    sys_model_by_tag[tag] = (H0, K_SI, Qref, Href, eta, SG)
-            except Exception as e:
-                st.warning(f"No se pudo ajustar curva de sistema para {tag}: {e}")
+st.subheader("2) Tabla de equipos (transmisión y geometría)")
+st.caption("Incluye diámetros de poleas, serie 5V/8V, ranuras, bushing y diámetro de eje. Puedes cargar sheaves_default.csv o editar aquí.")
+up_sh = st.file_uploader("Sube sheaves_default.csv (o usa el que viene por defecto)", type=["csv"], key="sheaves")
+if up_sh: sheaves_df = pd.read_csv(up_sh)
+else: sheaves_df = pd.read_csv("sheaves_default.csv")
+sheaves_df = st.data_editor(sheaves_df, use_container_width=True, num_rows="dynamic")
+st.download_button("Descargar sheaves CSV", sheaves_df.to_csv(index=False).encode("utf-8"), "sheaves_edited.csv", "text/csv")
+sheaves_df["r"] = sheaves_df["driven_od_in"]/sheaves_df["driver_od_in"]
+st.write("Relaciones derivadas de poleas:", sheaves_df[["TAG","driver_od_in","driven_od_in","r"]])
 
-# -------------------------------
-# Resultados
-# -------------------------------
-st.subheader("Resultados")
-res = compute_results(df, motors_by_tag, ramp_motor_rpm_s=ramp_motor,
-                      overload_pu=overload_pu, inertia_model=inertia_mode,
-                      sys_model_by_tag=sys_model_by_tag)
+st.subheader("3) Cálculo de tiempos por TAG")
+mech_cols = ["TAG","Jm_kgm2","Impeller_D_mm","Impeller_mass_kg","n_motor_min","n_motor_max","n_pump_min","n_pump_max"]
+mech_default = pd.DataFrame([
+    ("4210-PU-003", 0.5177, 600.0, 228.7, 738, 1475, 234, 469),
+    ("4220-PU-010",11.0000,1000.0,816.2, 495,  990, 200, 400),
+    ("4230-PU-011", 4.4300, 750.0, 268.6, 745, 1490, 294, 588),
+    ("4230-PU-015", 1.6400, 750.0, 268.6, 743, 1485, 216, 432),
+    ("4230-PU-022", 2.5700, 750.0, 128.1, 745, 1489, 216, 433),
+    ("4230-PU-031", 2.5700, 600.0, 228.7, 745, 1489, 318, 635),
+], columns=mech_cols)
+mech_df = st.data_editor(mech_default, use_container_width=True, num_rows="dynamic")
+st.download_button("Descargar mecánica CSV", mech_df.to_csv(index=False).encode("utf-8"), "mechanical_inputs.csv", "text/csv")
 
-st.dataframe(res, use_container_width=True, height=350)
-st.download_button("Descargar resultados CSV", res.to_csv(index=False).encode("utf-8"), "resultados_tiempos.csv", "text/csv")
+df = mech_df.merge(base_df, on="TAG", how="left").merge(sheaves_df, on="TAG", how="left")
 
-# -------------------------------
-# Gráfico por TAG (rampa VDF ideal)
-# -------------------------------
-st.subheader("Gráfico Δn vs t por rampa VDF (ideal)")
-tag_sel = st.selectbox("Selecciona un TAG", options=df["TAG"].tolist())
-r_sel = float(df.loc[df["TAG"]==tag_sel, "r"].iloc[0])
-pump_accel = ramp_motor / r_sel if r_sel>0 else 0.0
-n1 = float(df.loc[df["TAG"]==tag_sel, "n_pump_min [rpm]"].iloc[0])
-n2 = float(df.loc[df["TAG"]==tag_sel, "n_pump_max [rpm]"].iloc[0])
-t_ramp_only = (n2-n1)/pump_accel if pump_accel>0 else np.inf
-t_vals = np.linspace(0, t_ramp_only if np.isfinite(t_ramp_only) else 1.0, 100)
-n_vals = n1 + pump_accel*t_vals
+import json as _json
+try: T_nom_map = _json.loads(torque_nominal_by_tag)
+except Exception as e:
+    st.error(f"JSON de torques inválido: {e}"); T_nom_map = {}
 
-fig = plt.figure()
-plt.plot(t_vals, n_vals)
-plt.xlabel("Tiempo [s]")
-plt.ylabel("n bomba [rpm]")
-plt.title(f"{tag_sel} – Rampa VDF: {pump_accel:.1f} rpm/s (bomba)")
-st.pyplot(fig)
+inertia_model = st.selectbox("Modelo de inercia del impulsor", ["disco","aro"], index=0)
+belt_mass_factor = st.number_input("Masa equivalente de correas por polea (kg)", 0.0, 50.0, 5.0, 0.5)
+fluid_J_coeff = st.number_input("Coeff. de inercia del fluido k (J_fluid = k·m_fluid·R^2)", 0.0, 1.0, 0.0, 0.05)
 
-# -------------------------------
-# Conclusiones y mejoras
-# -------------------------------
-st.markdown("### Conclusiones preliminares")
-st.markdown("""
-- El mínimo teórico lo acota la **rampa del VDF**.  
-- Si el **par disponible** es bajo y/o \\(J_{eq}\\) alto, manda la **dinámica por par/inercia**.  
-- Recomendado definir **rampas diferenciadas** (subida/bajada) y validar **corriente** y **NPSH** para puntos acelerados.
-""")
+rows=[]
+for _, r in df.iterrows():
+    tag = r["TAG"]; T_nom = float(T_nom_map.get(tag, np.nan))
+    if np.isnan(T_nom): 
+        rows.append({"TAG":tag, "status":"Falta T_nom"}); continue
+    D_mm = float(r["Impeller_D_mm"]); m_imp = float(r["Impeller_mass_kg"]); R_m = (D_mm/1000.0)/2.0
+    J_imp_disc, J_imp_ring = inertia_disc_ring(m_imp, D_mm); J_imp = J_imp_disc if inertia_model=="disco" else J_imp_ring
+    # Sheaves inertia + belts
+    def _sheave_J(series, od_in, grooves):
+        J, m = sheave_inertia(series, float(od_in), int(grooves))
+        J += ring_J(belt_mass_factor, (float(od_in)*0.0254)/2.0)
+        return J
+    J_driver = _sheave_J(r["driver_series"], r["driver_od_in"], r["driver_grooves"])
+    J_driven = _sheave_J(r["driven_series"], r["driven_od_in"], r["driven_grooves"])
+    r_tr = float(r["r"]); rho = 1000.0*float(r["SG"]) if not pd.isna(r["SG"]) else 1000.0
+    m_fluid = rho * (math.pi*R_m**2 * 0.05)  # ancho 5 cm
+    J_fluid = fluid_J_coeff * m_fluid * R_m**2
+    Jm = float(r["Jm_kgm2"]); J_eq = Jm + J_driver + (r_tr**2)*(J_imp + J_driven + J_fluid)
+    T_avail = overload_pu * T_nom; T_avail_fun = lambda n: T_avail
+    nref = float(r["n_motor_max"]); H0 = float(r["H0_m"]) if not pd.isna(r["H0_m"]) else 0.0
+    K  = float(r["K_m_per_m3s2"]) if not pd.isna(r["K_m_per_m3s2"]) else 0.0
+    Qref = float(r["Q_ref_m3h"]) if not pd.isna(r["Q_ref_m3h"]) else 500.0
+    eta = float(r["Eta_ref"]) if not pd.isna(r["Eta_ref"]) else 0.65
+    SG  = float(r["SG"]) if not pd.isna(r["SG"]) else 1.0
+    T_load_fun = lambda n: tload_system_from_params(n, Qref, H0, K, nref, SG, eta)
+    n1, n2 = float(r["n_motor_min"]), float(r["n_motor_max"])
+    # Integración
+    def integrate(n1, n2, ramp_motor, J_eq, T_avail_fun, T_load_fun, steps=800):
+        t=0.0; dn=(n2-n1)/steps
+        for i in range(steps):
+            nmid = n1+(i+0.5)*dn
+            Tm = max(T_avail_fun(nmid)-T_load_fun(nmid), 0.0)
+            alpha = Tm/max(J_eq,1e-9)
+            accel = min((60.0/(2.0*math.pi))*alpha, ramp_motor)
+            if accel<=0: return float("inf")
+            t += dn/accel
+        return t
+    t_par = integrate(n1, n2, ramp_motor, J_eq, T_avail_fun, T_load_fun)
+    pump_accel = ramp_motor / max(r_tr,1e-6)
+    t_ramp_only = (float(r["n_pump_max"])-float(r["n_pump_min"])) / pump_accel if pump_accel>0 else float("inf")
+    t_final = max(t_ramp_only, t_par)
+    rows.append({"TAG":tag,"r_trans":r_tr,"J_eq [kg m2]":J_eq,"t_ramp_only [s]":t_ramp_only,"t_par [s]":t_par,"t_final [s]":t_final,
+                 "SG":SG,"eta":eta,"H0":H0,"K":K,"Q_ref_m3h":Qref,"J_driver":J_driver,"J_driven":J_driven,"J_imp":J_imp,"J_fluid":J_fluid})
+res = pd.DataFrame(rows)
+st.dataframe(res, use_container_width=True, height=360)
+st.download_button("Descargar resultados CSV", res.to_csv(index=False).encode("utf-8"), "resultados_v3.csv", "text/csv")
 
-st.markdown("### Información adicional recomendada")
-st.markdown("""
-- **Curva bomba + curva del sistema** (TDH, SG, FF) para estimar \\(T_{load}(n)\\) real.  
-- **Límites de corriente y sobrecarga temporal** del VDF por TAG.  
-- **Inercia de transmisión** (poleas/acoples) o **inercia de impulsor** del fabricante.
-""")
+st.markdown("---"); st.markdown("### Fórmulas")
+st.latex(r"P_{eje}=\frac{\rho g Q H}{\eta},\quad T_{\text{load}}=\frac{P_{eje}}{\omega}")
+st.latex(r"J_{\text{eq}}=J_m + J_{\text{driver}} + r^2\,(J_{\text{imp}}+J_{\text{driven}}+J_{\text{fluido}})")
+st.latex(r"\alpha(n)=\frac{T_{\text{avail}}-T_{\text{load}}(n)}{J_{\text{eq}}},\quad t=\int \frac{dn}{\min(\alpha\cdot 60/2\pi,\ \text{rampa}_{motor})}")
