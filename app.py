@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Memoria de Cálculo – Tiempo de reacción de bombas (VDF)
-Poner en la raíz: bombas_dataset_with_torque_params.xlsx
-
-Suposiciones:
-- La PRIMERA columna del Excel contiene los TAG (únicos).
-- Inercias de polea y manguito vienen en SI (kg·m²).
+Colocar en la raíz: bombas_dataset_with_torque_params.xlsx
 """
 
 import math
@@ -14,7 +10,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-# ------------------ utilidades ------------------
+# ---------- helpers ----------
 def norm(s: str) -> str:
     return (str(s).strip().lower()
             .replace(" ", "_").replace("-", "_")
@@ -44,7 +40,6 @@ def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 def fmt2(x):
-    """Devuelve texto con 2 decimales (o '—' si NaN)."""
     try:
         if x is None or (isinstance(x, float) and np.isnan(x)):
             return "—"
@@ -52,36 +47,30 @@ def fmt2(x):
     except Exception:
         return str(x)
 
-def line_value(label, value, unit=""):
-    st.markdown(f"**{label}:** `{fmt2(value)}{(' ' + unit) if unit else ''}`")
+def badge(value, unit=""):
+    return f"<span style='background:#1f6c4e;color:white;border-radius:8px;padding:2px 8px;font-weight:600;'>{fmt2(value)}{(' '+unit) if unit else ''}</span>"
 
-# ------------------ carga de datos ------------------
+def line_value(label, value, unit=""):
+    st.markdown(f"**{label}:** {badge(value, unit)}", unsafe_allow_html=True)
+
+# ---------- load data ----------
 DATA_PATH = "bombas_dataset_with_torque_params.xlsx"
 raw = pd.read_excel(DATA_PATH)
 df = raw.copy()
 df.columns = [norm(c) for c in df.columns]
 cols = set(df.columns)
 
-# Genera columnas de inercias totales en SI (si no existen)
-for c in [
-    "driverpulley_j_kgm2","driverbushing_j_kgm2",
-    "drivenpulley_j_kgm2","drivenbushing_j_kgm2",
-]:
+# SI to numeric
+for c in ["driverpulley_j_kgm2","driverbushing_j_kgm2","drivenpulley_j_kgm2","drivenbushing_j_kgm2"]:
     if c in df.columns and df[c].dtype == object:
         df[c] = df[c].apply(to_float)
 
-if "j_driver_total_kgm2" not in df.columns:
-    df["j_driver_total_kgm2"] = \
-        (df["driverpulley_j_kgm2"] if "driverpulley_j_kgm2" in df.columns else 0.0) + \
-        (df["driverbushing_j_kgm2"] if "driverbushing_j_kgm2" in df.columns else 0.0)
+# if total columns absent, create empty (we igual calculamos totals abajo)
+if "j_driver_total_kgm2" not in df.columns: df["j_driver_total_kgm2"] = np.nan
+if "j_driven_total_kgm2" not in df.columns: df["j_driven_total_kgm2"] = np.nan
 
-if "j_driven_total_kgm2" not in df.columns:
-    df["j_driven_total_kgm2"] = \
-        (df["drivenpulley_j_kgm2"] if "drivenpulley_j_kgm2" in df.columns else 0.0) + \
-        (df["drivenbushing_j_kgm2"] if "drivenbushing_j_kgm2" in df.columns else 0.0)
-
-# Mapeo flexible de columnas
-col_tag      = df.columns[0]  # primera columna = TAG
+# column map
+col_tag      = df.columns[0]
 col_power_kw = pick(cols, "motorpower_kw","motorpowerefective_kw","motorpowerinstalled_kw","power_kw")
 col_poles    = pick(cols, "poles")
 col_r        = pick(cols, "r_trans","relaciontransmision","relacion_transmision")
@@ -89,16 +78,14 @@ col_nmot_min = pick(cols, "motorspeedmin_rpm","motor_n_min_rpm","n_motor_min")
 col_nmot_max = pick(cols, "motorspeedmax_rpm","motor_n_max_rpm","n_motor_max")
 col_npum_min = pick(cols, "pump_n_min_rpm","n_pump_min")
 col_npum_max = pick(cols, "pump_n_max_rpm","n_pump_max")
+col_jm       = pick(cols, "motor_j_kgm2","j_motor_kgm2")
+col_jdrv_tot = "j_driver_total_kgm2"
+col_jdrn_tot = "j_driven_total_kgm2"
+col_jimp     = pick(cols, "impeller_j_kgm2","j_impeller_kgm2","j_impulsor_kgm2")
+col_dimp     = pick(cols, "impeller_d_mm","diametroimpulsor_mm")
+col_tnom     = pick(cols, "t_nom_nm")
 
-# Inercias
-col_jm   = pick(cols, "motor_j_kgm2","j_motor_kgm2")
-col_jdrv = pick(cols, "j_driver_total_kgm2")
-col_jdrn = pick(cols, "j_driven_total_kgm2")
-col_jimp = pick(cols, "impeller_j_kgm2","j_impeller_kgm2","j_impulsor_kgm2")
-col_dimp = pick(cols, "impeller_d_mm","diametroimpulsor_mm")
-col_tnom = pick(cols, "t_nom_nm")  # opcional
-
-# Hidráulica
+# hidráulica
 col_H0     = pick(cols, "h0_m")
 col_K      = pick(cols, "k_m_s2")
 col_eta_a  = pick(cols, "eta_a")
@@ -109,91 +96,125 @@ col_nref   = pick(cols, "n_ref_rpm")
 col_Qmin_h = pick(cols, "q_min_m3h")
 col_Qmax_h = pick(cols, "q_max_m3h")
 
-# Convierte a numérico lo que falte
+# cast numeric
 for c in [col_power_kw, col_poles, col_r, col_nmot_min, col_nmot_max, col_npum_min, col_npum_max,
-          col_jm, col_jdrv, col_jdrn, col_jimp, col_dimp, col_tnom,
+          col_jm, col_jdrv_tot, col_jdrn_tot, col_jimp, col_dimp, col_tnom,
           col_H0, col_K, col_eta_a, col_eta_b, col_eta_c, col_rho, col_nref, col_Qmin_h, col_Qmax_h]:
     if c and df[c].dtype == object:
         df[c] = df[c].apply(to_float)
 
-# ------------------ UI ------------------
+# ---------- UI ----------
 st.set_page_config(page_title="Memoria de Cálculo – Bombas (VDF)", layout="wide")
 st.title("Memoria de Cálculo – Tiempo de reacción de bombas (VDF)")
 
-# Selección de TAG por posición (primera columna)
-tag_series = df.iloc[:, 0].astype(str)
-tags = sorted(tag_series.unique().tolist())
+tags = sorted(df.iloc[:, 0].astype(str).unique().tolist())
 tag = st.sidebar.selectbox("TAG", tags)
-
 st.sidebar.header("Parámetros de simulación")
 ramp_rpm_s = st.sidebar.number_input("Rampa VDF [rpm/s] (eje motor)", min_value=1.0, value=300.0, step=10.0, format="%.2f")
 dt = st.sidebar.number_input("Paso de integración dt [s] (hidráulica)", min_value=0.001, value=0.01, step=0.01, format="%.3f")
 
-row = df.loc[tag_series == tag].iloc[0]
+row = df.loc[df.iloc[:,0].astype(str)==tag].iloc[0]
 
-# ------------------ 1) Entradas ------------------
+# ---------- 1) Entradas ----------
 st.header("1) Parámetros de entrada (dato)")
 c1, c2, c3 = st.columns(3)
+
 with c1:
     st.subheader("Motor / Transmisión")
     line_value("Potencia motor", row.get(col_power_kw, np.nan), "kW")
     if col_poles:
-        st.markdown(f"**Polos:** `{int(row[col_poles]) if not pd.isna(row.get(col_poles)) else '—'}`")
+        st.markdown(f"**Polos:** {badge(int(row[col_poles])) if not pd.isna(row.get(col_poles)) else '—'}", unsafe_allow_html=True)
     line_value("Relación r = ω_motor/ω_bomba", row.get(col_r, np.nan))
-    st.markdown(f"**n_motor min–max [rpm]:** `{fmt2(row.get(col_nmot_min, np.nan))} – {fmt2(row.get(col_nmot_max, np.nan))}`")
+    st.markdown(f"**Velocidad motor min–max [rpm]:** {badge(row.get(col_nmot_min, np.nan))} – {badge(row.get(col_nmot_max, np.nan))}", unsafe_allow_html=True)
     if (col_npum_min in df.columns) and (col_npum_max in df.columns):
-        st.markdown(f"**n_bomba min–max [rpm]:** `{fmt2(row.get(col_npum_min, np.nan))} – {fmt2(row.get(col_npum_max, np.nan))}`")
+        st.markdown(f"**Velocidad bomba min–max [rpm]:** {badge(row.get(col_npum_min, np.nan))} – {badge(row.get(col_npum_max, np.nan))}", unsafe_allow_html=True)
 
 with c2:
     st.subheader("Inercias (kg·m²)")
-    line_value("J_m (motor)", row.get(col_jm, np.nan))
-    # Desglose conductor
+
+    # driver (lado motor)
     drv_p = float(row.get("driverpulley_j_kgm2", np.nan)) if "driverpulley_j_kgm2" in df.columns else np.nan
     drv_b = float(row.get("driverbushing_j_kgm2", np.nan)) if "driverbushing_j_kgm2" in df.columns else np.nan
-    st.markdown(f"**J_driver (total):** `{fmt2(row.get(col_jdrv, np.nan))}`  \n"
-                f"└ = polea({fmt2(drv_p)}) + manguito({fmt2(drv_b)})")
-    # Desglose conducido
+    drv_vals = [v for v in [drv_p, drv_b] if not np.isnan(v)]
+    j_driver_calc = np.sum(drv_vals) if drv_vals else np.nan
+    j_driver = j_driver_calc if not np.isnan(j_driver_calc) else float(row.get(col_jdrv_tot, np.nan) or np.nan)
+
+    # driven (lado bomba)
     drn_p = float(row.get("drivenpulley_j_kgm2", np.nan)) if "drivenpulley_j_kgm2" in df.columns else np.nan
     drn_b = float(row.get("drivenbushing_j_kgm2", np.nan)) if "drivenbushing_j_kgm2" in df.columns else np.nan
-    st.markdown(f"**J_driven (total):** `{fmt2(row.get(col_jdrn, np.nan))}`  \n"
-                f"└ = polea({fmt2(drn_p)}) + manguito({fmt2(drn_b)})")
+    drn_vals = [v for v in [drn_p, drn_b] if not np.isnan(v)]
+    j_driven_calc = np.sum(drn_vals) if drn_vals else np.nan
+    j_driven = j_driven_calc if not np.isnan(j_driven_calc) else float(row.get(col_jdrn_tot, np.nan) or np.nan)
+
+    line_value("J_m (motor)", row.get(col_jm, np.nan))
+    st.markdown(f"**J_driver (total):** {badge(j_driver)}  \n"
+                f"└ = polea({fmt2(drv_p)}) + manguito({fmt2(drv_b)})", unsafe_allow_html=True)
+    st.markdown(f"**J_driven (total):** {badge(j_driven)}  \n"
+                f"└ = polea({fmt2(drn_p)}) + manguito({fmt2(drn_b)})", unsafe_allow_html=True)
     line_value("J_imp (impulsor)", row.get(col_jimp, np.nan))
 
 with c3:
     st.subheader("Impulsor / Hidráulica")
-    if col_dimp: line_value("D_imp", row.get(col_dimp, np.nan), "mm")
+    if col_dimp: line_value("Diámetro impulsor", row.get(col_dimp, np.nan), "mm")
     line_value("H0", row.get(col_H0, np.nan), "m")
     line_value("K", row.get(col_K, np.nan), "m·s⁻²")
     st.write("**η(Q)=a+bQ+cQ²** (Q en m³/s)")
-    st.markdown(f"a=`{fmt2(row.get(col_eta_a, np.nan))}`, b=`{fmt2(row.get(col_eta_b, np.nan))}`, c=`{fmt2(row.get(col_eta_c, np.nan))}`")
+    st.markdown(f"a={badge(row.get(col_eta_a, np.nan))}, b={badge(row.get(col_eta_b, np.nan))}, c={badge(row.get(col_eta_c, np.nan))}", unsafe_allow_html=True)
     line_value("ρ", row.get(col_rho, np.nan), "kg/m³")
     line_value("n_ref", row.get(col_nref, np.nan), "rpm")
-    st.markdown(f"**Q rango (m³/h):** `{fmt2(row.get(col_Qmin_h, np.nan))} – {fmt2(row.get(col_Qmax_h, np.nan))}`")
+    st.markdown(f"**Rango Q (m³/h):** {badge(row.get(col_Qmin_h, np.nan))} – {badge(row.get(col_Qmax_h, np.nan))}", unsafe_allow_html=True)
 
-# ------------------ 2) Inercia equivalente ------------------
+# ---------- 2) Inercia equivalente ----------
 st.header("2) Inercia equivalente al eje del motor")
+
 st.latex(r"J_{\mathrm{eq}} = J_m + J_{\mathrm{driver}} + \frac{J_{\mathrm{driven}} + J_{\mathrm{imp}}}{r^2}")
 
 J_m   = float(row.get(col_jm, 0.0) or 0.0)
-J_drv = float(row.get(col_jdrv, 0.0) or 0.0)
-J_drn = float(row.get(col_jdrn, 0.0) or 0.0)
+J_drv = float(j_driver if not np.isnan(j_driver) else 0.0)
+J_drn = float(j_driven if not np.isnan(j_driven) else 0.0)
 J_imp = float(row.get(col_jimp, 0.0) or 0.0)
 r_tr  = float(row.get(col_r, np.nan) or np.nan)
 
-J_eq = np.nan if (pd.isna(r_tr) or r_tr == 0) else J_m + J_drv + (J_drn + J_imp)/(r_tr**2)
-st.info(f"**J_eq (kg·m²):** {fmt2(J_eq)}")
+J_ref = (J_drn + J_imp) / (r_tr**2) if (not pd.isna(r_tr) and r_tr != 0) else np.nan
+J_eq  = (J_m + J_drv + J_ref) if not np.isnan(J_ref) else np.nan
 
-# ------------------ 3) Tiempo de reacción sin hidráulica ------------------
+# sustitución numérica
+st.markdown(
+    rf"""
+**Sustitución:**  
+\( J_{{eq}} = {fmt2(J_m)} + {fmt2(J_drv)} + \dfrac{{{fmt2(J_drn)}+{fmt2(J_imp)}}}{{{fmt2(r_tr)}^2}} \Rightarrow \)
+**{badge(J_eq, 'kg·m²')}**
+""",
+    unsafe_allow_html=True
+)
+
+# tabla de contribuciones
+contrib = pd.DataFrame([
+    {"Componente": "Lado motor (J_m + J_driver)", "kg·m²": round(J_m + J_drv, 4)},
+    {"Componente": "Reflejado lado bomba ((J_driven + J_imp)/r²)", "kg·m²": round(J_ref, 4) if not np.isnan(J_ref) else np.nan},
+    {"Componente": "Total J_eq", "kg·m²": round(J_eq, 4) if not np.isnan(J_eq) else np.nan},
+])
+st.dataframe(contrib, use_container_width=True)
+
+# ---------- 3) Tiempo sin hidráulica ----------
 st.header("3) Tiempo de reacción **sin** hidráulica")
 st.latex(r"\dot n_{\mathrm{torque}} = \frac{60}{2\pi}\,\frac{T_{\mathrm{nom}}}{J_{\mathrm{eq}}}")
 st.latex(r"t_{\mathrm{par}}=\frac{\Delta n}{\dot n_{\mathrm{torque}}},\quad "
          r"t_{\mathrm{rampa}}=\frac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}},\quad "
          r"t_{\mathrm{final,sin}}=\max(t_{\mathrm{par}},\,t_{\mathrm{rampa}})")
 
-# Usamos directamente los valores del dataset (no editables)
+# tooltip/ayuda
+with st.popover("ⓘ Ayuda"):
+    st.markdown(
+        "- **Δn**: salto de velocidad del motor.\n"
+        "- **ẋₙ_torque**: tasa máxima por par disponible y J_eq.\n"
+        "- **t_par**: tiempo limitado por par/inercia.\n"
+        "- **t_rampa**: tiempo limitado por rampa del VDF.\n"
+        "- **t_final(sin)**: mayor de ambos; piso teórico (sin carga hidráulica)."
+    )
+
 nmin = float(row.get(col_nmot_min, 0.0) or 0.0)
 nmax = float(row.get(col_nmot_max, 0.0) or 0.0)
-# Par nominal: si no está, se estima con P y n_max
 if col_tnom and not pd.isna(row.get(col_tnom)):
     T_nom = float(row[col_tnom])
 else:
@@ -202,8 +223,8 @@ else:
     T_nom = 9550.0 * P_kw / max(n_for_t, 1.0)
 
 m1, m2, m3 = st.columns(3)
-m1.metric("n_motor inicial [rpm]", fmt2(nmin))
-m2.metric("n_motor final [rpm]", fmt2(nmax))
+m1.metric("Velocidad motor inicial [rpm]", fmt2(nmin))
+m2.metric("Velocidad motor final [rpm]", fmt2(nmax))
 m3.metric("Par disponible T_nom [Nm]", fmt2(T_nom))
 
 delta_n = max(0.0, nmax - nmin)
@@ -211,10 +232,10 @@ accel_torque = (60.0/(2.0*math.pi)) * (T_nom / max(J_eq, 1e-9))  # rpm/s
 t_par   = delta_n / max(accel_torque, 1e-9)
 t_rampa = delta_n / max(ramp_rpm_s, 1e-9)
 t_nohyd = max(t_par, t_rampa)
-st.success(f"Δn={fmt2(delta_n)} rpm | ẋ_n={fmt2(accel_torque)} rpm/s  →  "
-           f"t_par={fmt2(t_par)} s, t_rampa={fmt2(t_rampa)} s, **t_final(sin)={fmt2(t_nohyd)} s**")
+st.success(f"Δn={fmt2(delta_n)} rpm | ẋ_n={fmt2(accel_torque)} rpm/s → t_par={fmt2(t_par)} s, "
+           f"t_rampa={fmt2(t_rampa)} s, **t_final(sin)={fmt2(t_nohyd)} s**")
 
-# ------------------ 4) Curva de sistema + hidráulica ------------------
+# ---------- 4) Hidráulica ----------
 st.header("4) Curva de sistema y tiempo **con** hidráulica")
 st.latex(r"H(Q)=H_0+K\,Q^2")
 st.latex(r"T_{\mathrm{pump}}(Q,n)=\dfrac{\rho\,g\,Q\,[H_0+KQ^2]}{\eta(Q)\,\omega(n)},\quad "
@@ -241,7 +262,6 @@ alpha_default = (Qref_h / max(n_ref, 1.0))  # m³/h por rpm de bomba
 alpha_user = st.number_input("α: caudal por rpm de bomba [m³/h·rpm]", value=float(alpha_default), step=1.0, format="%.2f")
 alpha = alpha_user / 3600.0                  # → m³/s por rpm
 
-# H(Q)
 Qh = np.linspace(max(Qmin_h*0.5, 1.0), max(Qmax_h*1.2, max(50.0, Qref_h*1.5)), 120)
 figH = go.Figure()
 figH.add_trace(go.Scatter(x=Qh, y=H_of_Q(Qh/3600.0), mode="lines", name="H(Q)=H0+KQ²", line=dict(width=3)))
@@ -299,7 +319,7 @@ if not any(pd.isna([J_eq, r_tr, H0, K, rho])):
 else:
     st.warning("Faltan parámetros para la simulación hidráulica (H0, K, ρ, r o J_eq).")
 
-# ------------------ 5) Exportar resumen ------------------
+# ---------- 5) Exportar ----------
 st.header("5) Exportar resumen")
 summary = pd.DataFrame([{
     "TAG": str(tag),
