@@ -5,7 +5,7 @@ Poner en la raíz: bombas_dataset_with_torque_params.xlsx
 
 Suposiciones:
 - La PRIMERA columna del Excel contiene los TAG (únicos).
-- Las inercias de polea y manguito están en SI (kg·m²).
+- Inercias de polea y manguito vienen en SI (kg·m²).
 """
 
 import math
@@ -42,6 +42,18 @@ def to_float(x):
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
+
+def fmt2(x):
+    """Devuelve texto con 2 decimales (o '—' si NaN)."""
+    try:
+        if x is None or (isinstance(x, float) and np.isnan(x)):
+            return "—"
+        return f"{float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return str(x)
+
+def line_value(label, value, unit=""):
+    st.markdown(f"**{label}:** `{fmt2(value)}{(' ' + unit) if unit else ''}`")
 
 # ------------------ carga de datos ------------------
 DATA_PATH = "bombas_dataset_with_torque_params.xlsx"
@@ -114,7 +126,7 @@ tags = sorted(tag_series.unique().tolist())
 tag = st.sidebar.selectbox("TAG", tags)
 
 st.sidebar.header("Parámetros de simulación")
-ramp_rpm_s = st.sidebar.number_input("Rampa VDF [rpm/s] (eje motor)", min_value=1.0, value=300.0, step=10.0)
+ramp_rpm_s = st.sidebar.number_input("Rampa VDF [rpm/s] (eje motor)", min_value=1.0, value=300.0, step=10.0, format="%.2f")
 dt = st.sidebar.number_input("Paso de integración dt [s] (hidráulica)", min_value=0.001, value=0.01, step=0.01, format="%.3f")
 
 row = df.loc[tag_series == tag].iloc[0]
@@ -124,37 +136,39 @@ st.header("1) Parámetros de entrada (dato)")
 c1, c2, c3 = st.columns(3)
 with c1:
     st.subheader("Motor / Transmisión")
-    st.write(f"**Potencia motor (kW):** {row.get(col_power_kw, np.nan)}")
+    line_value("Potencia motor", row.get(col_power_kw, np.nan), "kW")
     if col_poles:
-        st.write(f"**Polos:** {int(row[col_poles]) if not pd.isna(row.get(col_poles)) else '—'}")
-    st.write(f"**Relación r = ω_motor/ω_bomba:** {row.get(col_r, np.nan)}")
-    st.write(f"**n_motor min–max [rpm]:** {row.get(col_nmot_min, np.nan)} – {row.get(col_nmot_max, np.nan)}")
+        st.markdown(f"**Polos:** `{int(row[col_poles]) if not pd.isna(row.get(col_poles)) else '—'}`")
+    line_value("Relación r = ω_motor/ω_bomba", row.get(col_r, np.nan))
+    st.markdown(f"**n_motor min–max [rpm]:** `{fmt2(row.get(col_nmot_min, np.nan))} – {fmt2(row.get(col_nmot_max, np.nan))}`")
     if (col_npum_min in df.columns) and (col_npum_max in df.columns):
-        st.write(f"**n_bomba min–max [rpm]:** {row.get(col_npum_min, np.nan)} – {row.get(col_npum_max, np.nan)}")
+        st.markdown(f"**n_bomba min–max [rpm]:** `{fmt2(row.get(col_npum_min, np.nan))} – {fmt2(row.get(col_npum_max, np.nan))}`")
 
 with c2:
     st.subheader("Inercias (kg·m²)")
-    st.write(f"**J_m (motor):** {row.get(col_jm, np.nan)}")
+    line_value("J_m (motor)", row.get(col_jm, np.nan))
     # Desglose conductor
     drv_p = float(row.get("driverpulley_j_kgm2", np.nan)) if "driverpulley_j_kgm2" in df.columns else np.nan
     drv_b = float(row.get("driverbushing_j_kgm2", np.nan)) if "driverbushing_j_kgm2" in df.columns else np.nan
-    st.write(f"**J_driver (total):** {row.get(col_jdrv, np.nan)}  \n  └ = polea({drv_p}) + manguito({drv_b})")
+    st.markdown(f"**J_driver (total):** `{fmt2(row.get(col_jdrv, np.nan))}`  \n"
+                f"└ = polea({fmt2(drv_p)}) + manguito({fmt2(drv_b)})")
     # Desglose conducido
     drn_p = float(row.get("drivenpulley_j_kgm2", np.nan)) if "drivenpulley_j_kgm2" in df.columns else np.nan
     drn_b = float(row.get("drivenbushing_j_kgm2", np.nan)) if "drivenbushing_j_kgm2" in df.columns else np.nan
-    st.write(f"**J_driven (total):** {row.get(col_jdrn, np.nan)}  \n  └ = polea({drn_p}) + manguito({drn_b})")
-    st.write(f"**J_imp (impulsor):** {row.get(col_jimp, np.nan)}")
+    st.markdown(f"**J_driven (total):** `{fmt2(row.get(col_jdrn, np.nan))}`  \n"
+                f"└ = polea({fmt2(drn_p)}) + manguito({fmt2(drn_b)})")
+    line_value("J_imp (impulsor)", row.get(col_jimp, np.nan))
 
 with c3:
     st.subheader("Impulsor / Hidráulica")
-    if col_dimp: st.write(f"**D_imp (mm):** {row.get(col_dimp, np.nan)}")
-    st.write(f"**H0 (m):** {row.get(col_H0, np.nan)}")
-    st.write(f"**K (m·s⁻²):** {row.get(col_K, np.nan)}")
+    if col_dimp: line_value("D_imp", row.get(col_dimp, np.nan), "mm")
+    line_value("H0", row.get(col_H0, np.nan), "m")
+    line_value("K", row.get(col_K, np.nan), "m·s⁻²")
     st.write("**η(Q)=a+bQ+cQ²** (Q en m³/s)")
-    st.write(f"a={row.get(col_eta_a, np.nan)}, b={row.get(col_eta_b, np.nan)}, c={row.get(col_eta_c, np.nan)}")
-    st.write(f"**ρ (kg/m³):** {row.get(col_rho, np.nan)}")
-    st.write(f"**n_ref (rpm):** {row.get(col_nref, np.nan)}")
-    st.write(f"**Q rango (m³/h):** {row.get(col_Qmin_h, np.nan)} – {row.get(col_Qmax_h, np.nan)}")
+    st.markdown(f"a=`{fmt2(row.get(col_eta_a, np.nan))}`, b=`{fmt2(row.get(col_eta_b, np.nan))}`, c=`{fmt2(row.get(col_eta_c, np.nan))}`")
+    line_value("ρ", row.get(col_rho, np.nan), "kg/m³")
+    line_value("n_ref", row.get(col_nref, np.nan), "rpm")
+    st.markdown(f"**Q rango (m³/h):** `{fmt2(row.get(col_Qmin_h, np.nan))} – {fmt2(row.get(col_Qmax_h, np.nan))}`")
 
 # ------------------ 2) Inercia equivalente ------------------
 st.header("2) Inercia equivalente al eje del motor")
@@ -167,7 +181,7 @@ J_imp = float(row.get(col_jimp, 0.0) or 0.0)
 r_tr  = float(row.get(col_r, np.nan) or np.nan)
 
 J_eq = np.nan if (pd.isna(r_tr) or r_tr == 0) else J_m + J_drv + (J_drn + J_imp)/(r_tr**2)
-st.info(f"**J_eq (kg·m²):** {np.round(J_eq, 6)}")
+st.info(f"**J_eq (kg·m²):** {fmt2(J_eq)}")
 
 # ------------------ 3) Tiempo de reacción sin hidráulica ------------------
 st.header("3) Tiempo de reacción **sin** hidráulica")
@@ -176,7 +190,7 @@ st.latex(r"t_{\mathrm{par}}=\frac{\Delta n}{\dot n_{\mathrm{torque}}},\quad "
          r"t_{\mathrm{rampa}}=\frac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}},\quad "
          r"t_{\mathrm{final,sin}}=\max(t_{\mathrm{par}},\,t_{\mathrm{rampa}})")
 
-# Usar directamente los valores del dataset (sin inputs editables)
+# Usamos directamente los valores del dataset (no editables)
 nmin = float(row.get(col_nmot_min, 0.0) or 0.0)
 nmax = float(row.get(col_nmot_max, 0.0) or 0.0)
 # Par nominal: si no está, se estima con P y n_max
@@ -187,17 +201,18 @@ else:
     n_for_t = float(row.get(col_nmot_max, nmax) or nmax or 1.0)
     T_nom = 9550.0 * P_kw / max(n_for_t, 1.0)
 
-st.write(f"**n_motor inicial [rpm]:** {nmin}")
-st.write(f"**n_motor final [rpm]:** {nmax}")
-st.write(f"**Par disponible T_nom [Nm]:** {np.round(T_nom,2)}")
+m1, m2, m3 = st.columns(3)
+m1.metric("n_motor inicial [rpm]", fmt2(nmin))
+m2.metric("n_motor final [rpm]", fmt2(nmax))
+m3.metric("Par disponible T_nom [Nm]", fmt2(T_nom))
 
 delta_n = max(0.0, nmax - nmin)
 accel_torque = (60.0/(2.0*math.pi)) * (T_nom / max(J_eq, 1e-9))  # rpm/s
 t_par   = delta_n / max(accel_torque, 1e-9)
 t_rampa = delta_n / max(ramp_rpm_s, 1e-9)
 t_nohyd = max(t_par, t_rampa)
-st.success(f"Δn={delta_n:.1f} rpm | ẋ_n={accel_torque:.1f} rpm/s  →  t_par={t_par:.2f} s, "
-           f"t_rampa={t_rampa:.2f} s, **t_final(sin)={t_nohyd:.2f} s**")
+st.success(f"Δn={fmt2(delta_n)} rpm | ẋ_n={fmt2(accel_torque)} rpm/s  →  "
+           f"t_par={fmt2(t_par)} s, t_rampa={fmt2(t_rampa)} s, **t_final(sin)={fmt2(t_nohyd)} s**")
 
 # ------------------ 4) Curva de sistema + hidráulica ------------------
 st.header("4) Curva de sistema y tiempo **con** hidráulica")
@@ -223,7 +238,7 @@ Qmax_h = float(row.get(col_Qmax_h, 0.0) or 0.0)
 Qref_h = (Qmin_h + Qmax_h)/2.0 if (Qmax_h and Qmax_h > 0) else 0.0
 
 alpha_default = (Qref_h / max(n_ref, 1.0))  # m³/h por rpm de bomba
-alpha_user = st.number_input("α: caudal por rpm de bomba [m³/h·rpm]", value=float(alpha_default), step=1.0)
+alpha_user = st.number_input("α: caudal por rpm de bomba [m³/h·rpm]", value=float(alpha_default), step=1.0, format="%.2f")
 alpha = alpha_user / 3600.0                  # → m³/s por rpm
 
 # H(Q)
@@ -280,20 +295,25 @@ if not any(pd.isna([J_eq, r_tr, H0, K, rho])):
     figQ.update_layout(template="plotly_white", xaxis_title="t [s]", yaxis_title="Q [m³/h]", height=340)
     st.plotly_chart(figQ, use_container_width=True)
 
-    st.success(f"**Tiempo de reacción con hidráulica: {t_hyd:.2f} s**")
+    st.success(f"**Tiempo de reacción con hidráulica: {fmt2(t_hyd)} s**")
 else:
     st.warning("Faltan parámetros para la simulación hidráulica (H0, K, ρ, r o J_eq).")
 
-# ------------------ 5) Exportar ------------------
+# ------------------ 5) Exportar resumen ------------------
 st.header("5) Exportar resumen")
 summary = pd.DataFrame([{
     "TAG": str(tag),
-    "J_eq_kgm2": J_eq, "T_nom_Nm": T_nom, "r_trans": r_tr,
-    "n_ini_rpm": nmin, "n_fin_rpm": nmax, "delta_n_rpm": (nmax - nmin),
-    "accel_rpm_s_torque": accel_torque, "t_par_s": t_par,
-    "t_rampa_s": t_rampa, "t_final_sin_hidraulica_s": t_nohyd,
-    "H0_m": H0, "K_m_s2": K, "rho_kgm3": rho,
-    "eta_a": eta_a, "eta_b": eta_b, "eta_c": eta_c
+    "J_eq_kgm2": round(J_eq, 4) if not np.isnan(J_eq) else np.nan,
+    "T_nom_Nm": round(T_nom, 2),
+    "r_trans": round(r_tr, 3) if not np.isnan(r_tr) else np.nan,
+    "n_ini_rpm": round(nmin, 2), "n_fin_rpm": round(nmax, 2),
+    "delta_n_rpm": round(delta_n, 2),
+    "accel_rpm_s_torque": round(accel_torque, 2),
+    "t_par_s": round(t_par, 2), "t_rampa_s": round(t_rampa, 2),
+    "t_final_sin_hidraulica_s": round(t_nohyd, 2),
+    "H0_m": row.get(col_H0, np.nan), "K_m_s2": row.get(col_K, np.nan),
+    "rho_kgm3": row.get(col_rho, np.nan),
+    "eta_a": row.get(col_eta_a, np.nan), "eta_b": row.get(col_eta_b, np.nan), "eta_c": row.get(col_eta_c, np.nan)
 }])
 st.dataframe(summary, use_container_width=True)
 st.download_button(
