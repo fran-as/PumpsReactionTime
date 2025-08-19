@@ -71,7 +71,7 @@ df = raw.copy()
 df.columns = [norm(c) for c in df.columns]
 cols = set(df.columns)
 
-# a numérico
+# a numérico (SI)
 for c in ["driverpulley_j_kgm2","driverbushing_j_kgm2","drivenpulley_j_kgm2","drivenbushing_j_kgm2"]:
     if c in df.columns and df[c].dtype == object:
         df[c] = df[c].apply(to_float)
@@ -79,7 +79,7 @@ for c in ["driverpulley_j_kgm2","driverbushing_j_kgm2","drivenpulley_j_kgm2","dr
 if "j_driver_total_kgm2" not in df.columns: df["j_driver_total_kgm2"] = np.nan
 if "j_driven_total_kgm2" not in df.columns: df["j_driven_total_kgm2"] = np.nan
 
-# mapeo
+# mapeo de columnas
 col_tag      = df.columns[0]
 col_power_kw = pick(cols, "motorpower_kw","motorpowerefective_kw","motorpowerinstalled_kw","power_kw")
 col_poles    = pick(cols, "poles")
@@ -141,11 +141,11 @@ with c1:
 
 with c2:
     st.subheader("Inercias (kg·m²)")
-    # conductor
+    # conductor (lado motor): suma polea + manguito
     drv_p = float(row.get("driverpulley_j_kgm2", np.nan)) if "driverpulley_j_kgm2" in df.columns else np.nan
     drv_b = float(row.get("driverbushing_j_kgm2", np.nan)) if "driverbushing_j_kgm2" in df.columns else np.nan
     j_driver = np.nansum([drv_p, drv_b])
-    # conducido
+    # conducido (lado bomba)
     drn_p = float(row.get("drivenpulley_j_kgm2", np.nan)) if "drivenpulley_j_kgm2" in df.columns else np.nan
     drn_b = float(row.get("drivenbushing_j_kgm2", np.nan)) if "drivenbushing_j_kgm2" in df.columns else np.nan
     j_driven = np.nansum([drn_p, drn_b])
@@ -170,15 +170,19 @@ with c3:
 st.header("2) Inercia equivalente al eje del motor")
 st.latex(r"J_{\mathrm{eq}} \;=\; J_m \;+\; J_{\mathrm{driver}} \;+\; \dfrac{J_{\mathrm{driven}} + J_{\mathrm{imp}}}{r^{2}}")
 
-# explicación 1/r^2
-with st.popover("ⓘ ¿Por qué dividir por \(r^2\)?"):
+# Tooltip con LaTeX correcto
+with st.popover("ⓘ ¿Por qué dividir por r²?"):
     st.markdown(
-        "Las inercias del **lado bomba** giran a \(\\omega_p=\\omega_m/r\\). "
-        "Igualando energías cinéticas a la misma \(\\omega_m\\):  \n"
-        "\\(\\tfrac12 J_{eq}\\,\\omega_m^2=\\tfrac12 J_m\\,\\omega_m^2+\\tfrac12 J_{driver}\\,\\omega_m^2"
-        "+\\tfrac12 J_{driven}\\,\\omega_p^2+\\tfrac12 J_{imp}\\,\\omega_p^2\\) ⇒ "
-        "\\(J_{eq}=J_m+J_{driver}+(J_{driven}+J_{imp})/r^2\\)."
+        "Las inercias del **lado bomba** giran a \(\\omega_p = \\omega_m / r\\). "
+        "Igualando energías cinéticas y evaluando todo a la misma \(\\omega_m\\):"
     )
+    st.latex(
+        r"\tfrac12 J_{eq}\,\omega_m^2 \;=\; "
+        r"\tfrac12 J_m\,\omega_m^2 \;+\; \tfrac12 J_{driver}\,\omega_m^2 \;+\; "
+        r"\tfrac12 J_{driven}\,\omega_p^2 \;+\; \tfrac12 J_{imp}\,\omega_p^2"
+    )
+    st.markdown("Sustituyendo \(\\omega_p = \\omega_m / r\) y dividiendo por \(\\tfrac12\,\\omega_m^2\):")
+    st.latex(r"J_{eq} \;=\; J_m \;+\; J_{driver} \;+\; \dfrac{J_{driven}+J_{imp}}{r^2}")
 
 J_m   = float(row.get(col_jm, 0.0) or 0.0)
 J_drv = float(j_driver if not np.isnan(j_driver) else 0.0)
@@ -189,7 +193,7 @@ r_tr  = float(row.get(col_r, np.nan) or np.nan)
 J_ref = (J_drn + J_imp) / (r_tr**2) if (not pd.isna(r_tr) and r_tr != 0) else np.nan
 J_eq  = (J_m + J_drv + J_ref) if not np.isnan(J_ref) else np.nan
 
-# sustitución como LaTeX real
+# Sustitución numérica (LaTeX)
 st.latex(
     rf"J_{{eq}}={lnum(J_m)}+{lnum(J_drv)}+\frac{{{lnum(J_drn)}+{lnum(J_imp)}}}{{{lnum(r_tr)}^2}}"
     rf"={lnum(J_eq)}\ \mathrm{{kg\,m^2}}"
@@ -210,13 +214,19 @@ st.latex(r"t_{\mathrm{par}}=\dfrac{\Delta n}{\dot n_{\mathrm{torque}}},\qquad "
          r"t_{\mathrm{rampa}}=\dfrac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}},\qquad "
          r"t_{\mathrm{final,sin}}=\max\!\left(t_{\mathrm{par}},\,t_{\mathrm{rampa}}\right)")
 
+# Popover de ayuda con LaTeX
 with st.popover("ⓘ Ayuda"):
     st.markdown(
-        "- **Δn**: salto de velocidad del motor (rpm).  \n"
-        "- **ẋₙ_torque**: tasa máxima por par y \(J_{eq}\) (rpm/s).  \n"
-        "- **t_par**: limitado por par/inercia.  \n"
-        "- **t_rampa**: limitado por la rampa del VDF.  \n"
-        "- **t_final(sin)**: mayor de ambos (piso teórico, sin carga hidráulica)."
+        "- **Δn**: salto de velocidad del motor (rpm).\n"
+        "- **t_par** y **t_rampa** se calculan con:"
+    )
+    st.latex(r"\dot n_{\mathrm{torque}}=\dfrac{60}{2\pi}\,\dfrac{T_{\mathrm{nom}}}{J_{\mathrm{eq}}}")
+    st.latex(r"t_{\mathrm{par}}=\dfrac{\Delta n}{\dot n_{\mathrm{torque}}},\qquad "
+             r"t_{\mathrm{rampa}}=\dfrac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}}")
+    st.latex(r"t_{\mathrm{final,sin}}=\max\!\big(t_{\mathrm{par}},\,t_{\mathrm{rampa}}\big)")
+    st.markdown(
+        "- **Interpretación**: si \(t_{par}>t_{rampa}\) la limitación es **par/inercia**; "
+        "si \(t_{rampa}>t_{par}\) manda la **rampa del VDF**."
     )
 
 nmin = float(row.get(col_nmot_min, 0.0) or 0.0)
@@ -239,19 +249,33 @@ t_par   = delta_n / max(accel_torque, 1e-9)
 t_rampa = delta_n / max(ramp_rpm_s, 1e-9)
 t_nohyd = max(t_par, t_rampa)
 
-# sustituciones en LaTeX
+# --- NUEVO: resumen explícito y "quién limita" en LaTeX ---
 st.latex(
-    rf"\dot n_{{\mathrm{{torque}}}}=\frac{{60}}{{2\pi}}\frac{{{lnum(T_nom)}}}{{{lnum(J_eq)}}}"
-    rf"={lnum(accel_torque)}\ \mathrm{{rpm/s}}"
+    rf"\Delta n = {lnum(delta_n)}\ \mathrm{{rpm}},\quad "
+    rf"\dot n_{{\mathrm{{torque}}}} = {lnum(accel_torque)}\ \mathrm{{rpm/s}},\quad "
+    rf"t_{{par}} = {lnum(t_par)}\ \mathrm{{s}},\quad "
+    rf"t_{{rampa}} = {lnum(t_rampa)}\ \mathrm{{s}},\quad "
+    rf"t_{{final,sin}} = \max({lnum(t_par)},\,{lnum(t_rampa)}) = {lnum(t_nohyd)}\ \mathrm{{s}}"
 )
-st.latex(
-    rf"t_{{par}}=\frac{{{lnum(delta_n)}}}{{{lnum(accel_torque)}}}={lnum(t_par)}\ \mathrm{{s}},\qquad "
-    rf"t_{{rampa}}=\frac{{{lnum(delta_n)}}}{{{lnum(ramp_rpm_s)}}}={lnum(t_rampa)}\ \mathrm{{s}}"
-)
-st.latex(rf"t_{{final,sin}}=\max\!\left({lnum(t_par)},\,{lnum(t_rampa)}\right)={lnum(t_nohyd)}\ \mathrm{{s}}")
 
-st.success(f"Δn={fmt2(delta_n)} rpm | ẋ_n={fmt2(accel_torque)} rpm/s → t_par={fmt2(t_par)} s, "
-           f"t_rampa={fmt2(t_rampa)} s, **t_final(sin)={fmt2(t_nohyd)} s**")
+if t_par > t_rampa:
+    dominante = "Limitación por **par/inercia** (el VDF permite más rampa que el par disponible)."
+    color_box = st.warning
+else:
+    dominante = "Limitación por **rampa del VDF** (el par alcanzaría más rápido que la rampa configurada)."
+    color_box = st.info
+
+color_box(dominante)
+
+# “Qué pasaría si”: rampa requerida para Δn en 1 s vs. capacidad por par
+rampa_necesaria = delta_n / 1.0
+capacidad_por_par = accel_torque
+st.markdown(
+    f"**Para Δn en 1,00 s:** rampa requerida = {badge(rampa_necesaria, 'rpm/s')}  \n"
+    f"**Capacidad por par:** {badge(capacidad_por_par, 'rpm/s')}  \n"
+    f"**Rampa VDF actual:** {badge(ramp_rpm_s, 'rpm/s')}",
+    unsafe_allow_html=True
+)
 
 # ---------- 4) Hidráulica ----------
 st.header("4) Curva de sistema y tiempo **con** hidráulica")
