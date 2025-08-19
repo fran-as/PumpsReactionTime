@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pumps Reaction Time – Memoria de Cálculo (Streamlit)
-Coloca bombas_dataset_with_torque_params.xlsx en la raíz.
+Archivo esperado en la raíz: bombas_dataset_with_torque_params.xlsx
 """
 
 import re
@@ -17,94 +17,112 @@ def norm(s: str) -> str:
             .replace(" ", "_").replace("-", "_")
             .replace("(", "").replace(")", "").replace("%", "pct"))
 
-def pick(cols, *candidates, default=None):
-    for c in candidates:
-        if c in cols:
-            return c
-    return default
-
 def to_float(x):
     try:
-        if pd.isna(x):
-            return np.nan
+        if pd.isna(x): return np.nan
         s = str(x).strip()
-        if s == "":
-            return np.nan
-        # normaliza coma/ punto
+        if s == "": return np.nan
         if "," in s and "." in s:
             s = s.replace(".", "").replace(",", ".")
         else:
             s = s.replace(",", ".")
         return float(s)
     except Exception:
-        try:
-            return float(x)
-        except Exception:
-            return np.nan
+        try: return float(x)
+        except Exception: return np.nan
 
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
+def clamp(x, lo, hi): return max(lo, min(hi, x))
+
+def series_from_any(df: pd.DataFrame, col):
+    """Devuelve una Series 'segura' aunque haya columnas duplicadas o objetos raros."""
+    obj = df[col]
+    if isinstance(obj, pd.Series):
+        return obj
+    if isinstance(obj, pd.DataFrame):
+        return obj.iloc[:, 0]
+    # última barrera
+    return pd.Series(obj)
 
 # ---------------- Carga de datos ----------------
 DATA_PATH = "bombas_dataset_with_torque_params.xlsx"
-raw = pd.read_excel(DATA_PATH)        # para mostrar
-df = raw.copy()                       # para cálculo
+raw = pd.read_excel(DATA_PATH)   # copia para mostrar si quieres
+df = raw.copy()
 df.columns = [norm(c) for c in df.columns]
-cols = set(df.columns)
+cols = list(df.columns)
+cols_set = set(cols)
 
-# --------- Detección robusta de la columna TAG ---------
-# 1) candidatos por nombre
-name_candidates = [c for c in df.columns if any(k in c for k in ["tag", "eq_no", "eqno", "equipo"])]
-# 2) valida por regex en valores
-def looks_like_tag(series: pd.Series) -> bool:
-    sample = series.astype(str).head(200).tolist()
-    return any(re.search(r"\b\d{4}-PU-\d{3}\b", s) for s in sample)
+st.set_page_config(page_title="Tiempo de reacción de bombas (VDF)", layout="wide")
+st.title("Memoria de Cálculo – Tiempo de reacción de bombas (VDF)")
 
+st.sidebar.header("Selección de columnas")
+
+# --------- Detección robusta de la columna TAG ----------
+def looks_like_tag_col(df: pd.DataFrame, colname: str) -> bool:
+    s = series_from_any(df, colname).astype(str).head(250).tolist()
+    return any(re.search(r"\b\d{4}-PU-\d{3}\b", v) for v in s)
+
+# 1) por nombre + regex
+name_hint = [c for c in cols if any(k in c for k in ["tag", "eq_no", "eqno", "equipo"])]
 detected = None
-for c in name_candidates:
-    if looks_like_tag(df[c]):
+for c in name_hint:
+    if looks_like_tag_col(df, c):
         detected = c
         break
 
-# Si no se detecta, dejamos elegir al usuario
-st.set_page_config(page_title="Tiempo de reacción de bombas (VDF)", layout="wide")
-st.sidebar.header("Selección de columnas")
-
+# 2) si no, barrido de todas las columnas por regex en valores
 if detected is None:
-    st.sidebar.warning("No se detectó automáticamente la columna del TAG. Selecciónala manualmente.")
-    detected = st.sidebar.selectbox("Columna TAG", options=df.columns)
+    for c in cols:
+        try:
+            if looks_like_tag_col(df, c):
+                detected = c
+                break
+        except Exception:
+            continue
+
+# 3) selección manual si aún no se detecta
+if detected is None:
+    st.sidebar.warning("No se detectó automáticamente la columna de TAG. Selecciónala manualmente.")
+    detected = st.sidebar.selectbox("Columna TAG", options=cols)
+else:
+    st.sidebar.caption(f"Columna TAG detectada: **{detected}** (puedes cambiarla abajo)")
+    detected = st.sidebar.selectbox("Columna TAG", options=cols, index=cols.index(detected))
 
 col_tag = detected
 
-# --------- Mapeo flexible del resto de columnas ---------
-col_power_kw  = pick(cols, "motorpower_kw", "motorpowerefective_kw", "motorpowerinstalled_kw", "power_kw")
-col_tnom_nm   = pick(cols, "t_nom_nm")
-col_poles     = pick(cols, "poles")
-col_r         = pick(cols, "r_trans", "relaciontransmision", "relacion_transmision", "ratio")
-col_nmot_min  = pick(cols, "motor_n_min_rpm", "n_motor_min", "motorspeedmin_rpm")
-col_nmot_max  = pick(cols, "motor_n_max_rpm", "n_motor_max", "motorspeedmax_rpm")
-col_npum_min  = pick(cols, "pump_n_min_rpm", "n_pump_min")
-col_npum_max  = pick(cols, "pump_n_max_rpm", "n_pump_max")
+# --------- Mapeo flexible del resto de columnas ----------
+def pick(*candidates, default=None):
+    for c in candidates:
+        if c in cols_set: return c
+    return default
+
+col_power_kw  = pick("motorpower_kw", "motorpowerefective_kw", "motorpowerinstalled_kw", "power_kw")
+col_tnom_nm   = pick("t_nom_nm")
+col_poles     = pick("poles")
+col_r         = pick("r_trans", "relaciontransmision", "relacion_transmision", "ratio")
+col_nmot_min  = pick("motor_n_min_rpm", "n_motor_min", "motorspeedmin_rpm")
+col_nmot_max  = pick("motor_n_max_rpm", "n_motor_max", "motorspeedmax_rpm")
+col_npum_min  = pick("pump_n_min_rpm", "n_pump_min")
+col_npum_max  = pick("pump_n_max_rpm", "n_pump_max")
 
 # Inercias
-col_jm        = pick(cols, "motor_j_kgm2", "j_motor_kgm2")
-col_jdrv      = pick(cols, "j_driver_total_kgm2", "driver_total_j_kgm2")
-col_jdrn      = pick(cols, "j_driven_total_kgm2", "driven_total_j_kgm2")
-col_jimp      = pick(cols, "impeller_j_kgm2", "j_impeller_kgm2", "j_impulsor_kgm2")
-col_dimp_mm   = pick(cols, "impeller_d_mm", "diametroimpulsor_mm")
+col_jm        = pick("motor_j_kgm2", "j_motor_kgm2")
+col_jdrv      = pick("j_driver_total_kgm2", "driver_total_j_kgm2")
+col_jdrn      = pick("j_driven_total_kgm2", "driven_total_j_kgm2")
+col_jimp      = pick("impeller_j_kgm2", "j_impeller_kgm2", "j_impulsor_kgm2")
+col_dimp_mm   = pick("impeller_d_mm", "diametroimpulsor_mm")
 
 # Hidráulica
-col_H0        = pick(cols, "h0_m")
-col_K         = pick(cols, "k_m_s2")
-col_eta_a     = pick(cols, "eta_a")
-col_eta_b     = pick(cols, "eta_b")
-col_eta_c     = pick(cols, "eta_c")
-col_rho       = pick(cols, "rho_kgm3")
-col_nref      = pick(cols, "n_ref_rpm")
-col_Qmin_h    = pick(cols, "q_min_m3h")
-col_Qmax_h    = pick(cols, "q_max_m3h")
+col_H0        = pick("h0_m")
+col_K         = pick("k_m_s2")
+col_eta_a     = pick("eta_a")
+col_eta_b     = pick("eta_b")
+col_eta_c     = pick("eta_c")
+col_rho       = pick("rho_kgm3")
+col_nref      = pick("n_ref_rpm")
+col_Qmin_h    = pick("q_min_m3h")
+col_Qmax_h    = pick("q_max_m3h")
 
-# Tipado numérico
+# tipado numérico
 for c in [col_power_kw, col_tnom_nm, col_poles, col_r,
           col_nmot_min, col_nmot_max, col_npum_min, col_npum_max,
           col_jm, col_jdrv, col_jdrn, col_jimp, col_dimp_mm,
@@ -112,20 +130,16 @@ for c in [col_power_kw, col_tnom_nm, col_poles, col_r,
     if c and (df[c].dtype == object):
         df[c] = df[c].apply(to_float)
 
-# ---------------- UI ----------------
-st.title("Memoria de Cálculo – Tiempo de reacción de bombas (VDF)")
-
-# Lista de TAGs segura
-tag_series = df[col_tag].astype(str)
+# ---------------- UI – selección TAG ----------------
+tag_series = series_from_any(df, col_tag).astype(str)
 tags = sorted(tag_series.unique().tolist())
 tag = st.sidebar.selectbox("TAG", tags)
 
-# Parámetros globales
 st.sidebar.header("Parámetros de simulación")
 ramp_rpm_s = st.sidebar.number_input("Rampa VDF [rpm/s] (eje motor)", min_value=1.0, value=300.0, step=10.0)
 dt = st.sidebar.number_input("Paso de integración dt [s] (hidráulica)", min_value=0.001, value=0.01, step=0.01, format="%.3f")
 
-row = df[df[col_tag].astype(str) == str(tag)].iloc[0]
+row = df[tag_series == str(tag)].iloc[0]
 
 # ---------------- 1) Entrada ----------------
 st.header("1) Parámetros de entrada (datos)")
@@ -224,9 +238,8 @@ Qmax_h = float(row.get(col_Qmax_h, 0.0) or 0.0)
 Qref_h = (Qmin_h + Qmax_h)/2.0 if (Qmax_h > 0) else 0.0
 alpha_default = (Qref_h / max(n_ref, 1.0))
 alpha_user = st.number_input("α: caudal por rpm de bomba [m³/h·rpm]", value=float(alpha_default), step=1.0)
-alpha = alpha_user / 3600.0   # → m³/s por rpm
+alpha = alpha_user / 3600.0   # m³/s por rpm
 
-# Gráfica H(Q)
 Qh = np.linspace(max(Qmin_h*0.5, 1.0), max(Qmax_h*1.2, max(50.0, Qref_h*1.5)), 100)
 Qs = Qh/3600.0
 fig = go.Figure()
@@ -236,8 +249,8 @@ st.plotly_chart(fig, use_container_width=True)
 
 st.markdown(r"""
 \[
-T_{\text{pump}}(Q,n)=\frac{\rho g Q \left(H_0 + KQ^2\right)}{\eta(Q)\,\omega(n)},\quad \omega(n)=2\pi n/60,\quad
-T_{\text{motor}}=\frac{T_{\text{pump}}}{r}
+T_{\text{pump}}(Q,n)=\frac{\rho g Q \left(H_0 + KQ^2\right)}{\eta(Q)\,\omega(n)},\quad
+\omega(n)=2\pi n/60,\quad T_{\text{motor}}=\frac{T_{\text{pump}}}{r}
 \]
 \[
 \frac{dn_{\text{motor}}}{dt}=\min\!\left(\text{rampa}_{\text{VDF}},\;\frac{60}{2\pi}\frac{T_{\text{nom}}-T_{\text{motor}}(n)}{J_{\text{eq}}}\right)
@@ -294,11 +307,11 @@ else:
 # ---------------- 5) Exportar resumen ----------------
 st.header("5) Exportar resultados")
 summary = {
-    "TAG": tag,
+    "TAG": str(tag),
     "J_m_kgm2": J_m, "J_driver_kgm2": J_drv, "J_driven_kgm2": J_drn, "J_imp_kgm2": J_imp,
     "r_trans": r_tr, "J_eq_kgm2": J_eq,
     "T_nom_Nm": T_nom, "rampa_rpm_s": ramp_rpm_s,
-    "n_ini_rpm": n_ini, "n_fin_rpm": n_fin, "delta_n_rpm": delta_n,
+    "n_ini_rpm": float(n_ini), "n_fin_rpm": float(n_fin), "delta_n_rpm": float(n_fin-n_ini),
     "accel_rpm_s_torque": accel_torque, "t_par_s": t_par, "t_rampa_s": t_rampa,
     "t_final_sin_hidraulica_s": t_final_nohyd,
     "H0_m": H0, "K_m_s2": K, "rho_kgm3": rho,
