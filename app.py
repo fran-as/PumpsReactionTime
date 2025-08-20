@@ -198,29 +198,28 @@ st.markdown("---")
 # ------------------------------
 st.subheader("3) Respuesta inercial (sin efectos hidráulicos)")
 
-# --- Espaciado/estética KaTeX ---
+# --- Estilos para badges verdes y aire visual ---
 st.markdown(
     """
     <style>
-    /* Más aire alrededor de las fórmulas */
-    .katex-display { margin: 0.4rem 0 0.6rem 0 !important; }
-    /* Inputs más compactos en columnas */
-    .stNumberInput > div > div { width: 220px; }
+      .pill {display:inline-block;padding:0.25rem 0.65rem;border-radius:999px;
+             font-weight:600;font-size:0.95rem;line-height:1;border:1px solid rgba(0,0,0,.2);}
+      .pill-green {background:#113b2c;color:#c9f7dc;border-color:#1f7a4f;}
+      .dim {opacity:.85}
+      .katex-display { margin: .35rem 0 .55rem 0 !important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
+def green(text):  # badge verde
+    return f"<span class='pill pill-green'>{text}</span>"
 
-# Definiciones (símbolos)
-st.latex(
-    r"""
-    \textbf{Definiciones:}\quad
-    \dot{n}_{\mathrm{torque}}=\text{tasa de aceleración por par [rpm/s]},\;
-    t=\text{tiempo [s]},\;
-    \Delta n=n_f-n_i\;[\mathrm{rpm}],\;
-    T_{\mathrm{disp}}=\text{par disponible en el eje del motor [Nm]}.
-    """
-)
+# --- Definiciones en renglones distintos ---
+st.latex(r"\textbf{Definiciones:}")
+st.latex(r"\dot{n}_{\mathrm{torque}}\;:\;\text{tasa de aceleración por par [rpm/s]}")
+st.latex(r"t\;:\;\text{tiempo [s]}")
+st.latex(r"\Delta n=n_f-n_i\;[\mathrm{rpm}]")
+st.latex(r"T_{\mathrm{disp}}\;:\;\text{par disponible en el eje del motor [Nm]}")
 
 # --- Entradas compactas ---
 c31, c32, c33 = st.columns((1, 1, 1))
@@ -234,11 +233,7 @@ with c32:
 with c33:
     T_disp = st.number_input("Par disponible [Nm]", value=float(vals["T_nom"]))
 
-st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-# Mostrar el símbolo asociado al input (sin meter LaTeX en la etiqueta del widget)
-st.latex(r"T_{\mathrm{disp}}=\text{Par disponible en el eje del motor}.")
-
-# Control de rampa en la barra lateral (se mantiene)
+# Control de rampa en la barra lateral
 rampa_vdf = st.sidebar.number_input(
     "Rampa VDF [rpm/s] (motor)", min_value=1.0, value=300.0, step=1.0
 )
@@ -255,41 +250,48 @@ dn_sin, n_dot_sin, t_par_sin, t_ramp_sin, t_fin_sin = times_no_hyd(
     J_eq, T_disp, n_ini_m, n_fin_m, rampa_vdf
 )
 
-# --- Ecuaciones en limpio (una por línea) ---
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-st.latex(r"\textbf{Ecuaciones:}")
-st.latex(r"\dot{n}_{\mathrm{torque}}=\frac{60}{2\pi}\,\frac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}")
-st.latex(r"t_{\mathrm{par}}=\frac{\Delta n}{\dot{n}_{\mathrm{torque}}}")
-st.latex(r"t_{\mathrm{rampa}}=\frac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}}")
-st.latex(r"t_{\mathrm{final}}=\max\!\left(t_{\mathrm{par}},\,t_{\mathrm{rampa}}\right)")
+# --- Dos columnas: Ecuaciones  /  Sustitución numérica ---
+colEqs, colSubs = st.columns(2)
 
-# --- Sustitución numérica (formato claro y con unidades) ---
-st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-st.latex(r"\textbf{Sustitución numérica:}")
+with colEqs:
+    st.latex(r"\textbf{Ecuaciones}")
+    st.latex(r"\dot{n}_{\mathrm{torque}}=\frac{60}{2\pi}\,\frac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}")
+    st.latex(r"t_{\mathrm{par}}=\frac{\Delta n}{\dot{n}_{\mathrm{torque}}}")
+    st.latex(r"t_{\mathrm{rampa}}=\frac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}}")
+    st.latex(r"t_{\mathrm{final}}=\max\!\left(t_{\mathrm{par}},\,t_{\mathrm{rampa}}\right)")
 
-st.latex(rf"\Delta n = {dn_sin:.2f}\ \mathrm{{rpm}}")
+with colSubs:
+    st.latex(r"\textbf{Sustitución numérica}")
+    st.latex(rf"\Delta n = {dn_sin:.2f}\ \mathrm{{rpm}}")
+    st.markdown(green(f"Δn = {dn_sin:.2f} rpm"), unsafe_allow_html=True)
 
-st.latex(
-    rf"\dot{{n}}_{{\mathrm{{torque}}}}"
-    rf"=\frac{{60}}{{2\pi}}\cdot\frac{{{T_disp:.2f}}}{{{J_eq:.2f}}}"
-    rf"= {n_dot_sin:.2f}\ \mathrm{{rpm/s}}"
-)
+    st.latex(
+        rf"\dot{{n}}_{{\mathrm{{torque}}}}"
+        rf"=\frac{{60}}{{2\pi}}\cdot\frac{{{T_disp:.2f}}}{{{J_eq:.2f}}}"
+        rf"= {n_dot_sin:.2f}\ \mathrm{{rpm/s}}"
+    )
+    st.markdown(green(f"ṉ_torque = {n_dot_sin:.2f} rpm/s"), unsafe_allow_html=True)
 
-st.latex(
-    rf"t_{{\mathrm{{par}}}}=\frac{{{dn_sin:.2f}}}{{{n_dot_sin:.2f}}}"
-    rf"= {t_par_sin:.2f}\ \mathrm{{s}}"
-)
-st.latex(
-    rf"t_{{\mathrm{{rampa}}}}=\frac{{{dn_sin:.2f}}}{{{rampa_vdf:.2f}}}"
-    rf"= {t_ramp_sin:.2f}\ \mathrm{{s}}"
-)
+    st.latex(
+        rf"t_{{\mathrm{{par}}}}=\frac{{{dn_sin:.2f}}}{{{n_dot_sin:.2f}}}"
+        rf"= {t_par_sin:.2f}\ \mathrm{{s}}"
+    )
+    st.markdown(green(f"t_par = {t_par_sin:.2f} s"), unsafe_allow_html=True)
 
+    st.latex(
+        rf"t_{{\mathrm{{rampa}}}}=\frac{{{dn_sin:.2f}}}{{{rampa_vdf:.2f}}}"
+        rf"= {t_ramp_sin:.2f}\ \mathrm{{s}}"
+    )
+    st.markdown(green(f"t_rampa = {t_ramp_sin:.2f} s"), unsafe_allow_html=True)
+
+# Resultado final destacado
 st.latex(rf"\boxed{{t_{{\mathrm{{final}}}}= {t_fin_sin:.2f}\ \mathrm{{s}}}}")
+st.markdown(green(f"⏱  Tiempo de reacción (sin hidráulica) = {t_fin_sin:.2f} s"),
+            unsafe_allow_html=True)
 
-st.caption(
-    "En esta sección aún no se incluye el par hidráulico de la bomba (solo la respuesta por inercia del tren motriz)."
-)
+st.caption("En esta sección aún no se incluye el par hidráulico de la bomba (solo la respuesta por inercia del tren motriz).")
 st.markdown("---")
+
 
 
 # ------------------------------
