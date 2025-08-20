@@ -200,73 +200,151 @@ st.subheader("3) Respuesta inercial (sin efectos hidráulicos)")
 
 import math
 
-# --- Definiciones en renglones separados ---
-st.latex(r"\textbf{Definiciones:}")
-st.latex(r"\dot{n}_{\mathrm{torque}}:\; \text{tasa de aceleración debida al par}\;[\mathrm{rpm/s}]")
-st.latex(r"t:\;\text{tiempo}\;[\mathrm{s}]")
-st.latex(r"\Delta n = n_f - n_i\;[\mathrm{rpm}]")
-st.latex(r"T_{\mathrm{disp}}:\;\text{par disponible en el eje del motor}\;[\mathrm{Nm}]")
+# -----------------------------
+# Utilidades sobre el dataset seleccionado (vals)
+# -----------------------------
+def v(keys, default=0.0):
+    """Intenta leer cualquiera de estas claves del dict vals; si no están, devuelve default."""
+    for k in keys:
+        if k in vals and vals[k] is not None and str(vals[k]) != "":
+            return float(vals[k])
+    return float(default)
 
-# --- Entradas compactas ---
-c_in1, c_in2, c_in3 = st.columns(3)
-with c_in1:
-    n_ini_m = st.number_input("Velocidad Motor inicial [rpm]", value=float(vals["n_min"]))
-with c_in2:
-    n_fin_m = st.number_input("Velocidad Motor final [rpm]", value=float(max(vals["n_min"]+300, vals["n_max"])))
-with c_in3:
-    T_disp = st.number_input("Par disponible [Nm]", value=float(vals["T_nom"]))
+# Relación de transmisión r = n_motor / n_bomba
+r = v(["ratio","RelacionTransmision","relacion","r","TransmissionRatio"], 1.0)
 
-# Rampa del VDF en la barra lateral (motor)
-rampa_vdf = st.sidebar.number_input("Rampa VDF [rpm/s] (motor)", min_value=1.0, value=300.0, step=1.0)
+# Inercias (todas en SI: kg·m²)
+J_m      = v(["J_m","J_motor","Motor_J_kgm2"], 0.0)
+J_drv    = v(["J_driver","J_driver_total","J_polea_motor"], 0.0)   # polea + manguito motor
+J_drn    = v(["J_driven","J_driven_total","J_polea_bomba"], 0.0)   # polea + manguito bomba
+J_imp    = v(["J_imp","Impeller_J_kgm2","J_impulsor"], 0.0)
 
-# --- Cálculo base (sin hidráulica) ---
-def times_no_hyd(J_eq, T, n_i, n_f, ramp):
-    dn = max(n_f - n_i, 0.0)
-    n_dot = (60.0 / (2.0 * math.pi)) * (T / max(J_eq, 1e-9))   # \dot{n}_{torque} [rpm/s]
-    t_par = dn / max(n_dot, 1e-9)                              # t_par = Δn / \dot{n}
-    t_rampa = dn / max(ramp, 1e-9)                             # t_rampa = Δn / rampa_VDF
-    return dn, n_dot, t_par, t_rampa, max(t_par, t_rampa)
+# Si ya calculaste J_eq antes, úsalo; si no, compútalo aquí con r
+J_eq_from_vals = J_m + J_drv + (J_drn + J_imp)/(r**2)
+J_eq = float(st.session_state.get("J_eq", J_eq_from_vals))  # permite que otra sección inyecte J_eq
 
-dn_sin, n_dot_sin, t_par_sin, t_ramp_sin, t_fin_sin = times_no_hyd(J_eq, T_disp, n_ini_m, n_fin_m, rampa_vdf)
+# Rango de velocidades del motor (desde dataset)
+n_min = v(["n_min","MotorSpeedMin_rpm","n_motor_min"], 495.0)
+n_max = v(["n_max","MotorSpeedMax_rpm","n_motor_max"], 990.0)
+T_nom = v(["T_nom","T_motor_nominal","Par_nominal_Nm"], 240.0)
 
-# --- Disposición de ecuaciones y sustitución numérica ---
-c_eqs, c_nums = st.columns(2)
+# -----------------------------------
+# Definiciones (texto + símbolos)
+# -----------------------------------
+st.latex(r"\textbf{Definiciones}")
+st.latex(r"\sum \tau = J\,\alpha \quad\Rightarrow\quad \alpha = \dfrac{\tau_{\mathrm{disp}}-\tau_{\mathrm{load}}}{J_{\mathrm{eq}}}")
+st.caption("Balance de par rotacional; aquí consideraremos únicamente la inercia (sin par hidráulico).")
 
-with c_eqs:
-    st.latex(r"\textbf{Ecuaciones}")
-    st.latex(r"\dot{n}_{\mathrm{torque}}=\frac{60}{2\pi}\,\frac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}")
-    st.latex(r"t_{\mathrm{par}}=\frac{\Delta n}{\dot{n}_{\mathrm{torque}}}")
-    st.latex(r"t_{\mathrm{rampa}}=\frac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}}")
-    st.latex(r"t_{\mathrm{final}}=\max\!\left(t_{\mathrm{par}},\,t_{\mathrm{rampa}}\right)")
+st.latex(r"\dot{n}_{\mathrm{torque}} = \dfrac{60}{2\pi}\,\alpha"
+         r"\quad\Rightarrow\quad"
+         r"\dot{n}_{\mathrm{torque}}=\dfrac{60}{2\pi}\,\dfrac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}\;[\mathrm{rpm/s}]")
+st.caption(r"Tasa de cambio de rpm producida por el par disponible.")
 
-with c_nums:
-    st.latex(r"\textbf{Sustitución numérica}")
-    st.latex(rf"\Delta n = {dn_sin:.2f}\;\mathrm{{rpm}}")
+st.latex(r"J_{\mathrm{eq}} = J_m + J_{\mathrm{driver}} + \dfrac{J_{\mathrm{driven}}+J_{\mathrm{imp}}}{r^2}")
+st.caption(r"Inercia equivalente vista en el eje del motor. r = n_{\mathrm{motor}}/n_{\mathrm{bomba}}.")
+
+st.latex(r"t_{\mathrm{par}}=\dfrac{\Delta n}{\dot{n}_{\mathrm{torque}}}, \qquad"
+         r"t_{\mathrm{rampa}}=\dfrac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}}, \qquad"
+         r"t_{\mathrm{final}}=\max\!\left(t_{\mathrm{par}},t_{\mathrm{rampa}}\right)")
+st.caption("Tiempos por límite de par y por límite de rampa del VDF; el tiempo real es el mayor de ambos.")
+
+# -----------------------------------
+# Entradas compactas
+# -----------------------------------
+ci, cf, ct = st.columns(3)
+with ci:
+    n_ini_m = st.number_input("Velocidad Motor inicial [rpm]", value=float(n_min), step=1.0, format="%.2f")
+with cf:
+    n_fin_m = st.number_input("Velocidad Motor final [rpm]", value=float(n_max), step=1.0, format="%.2f")
+with ct:
+    T_disp = st.number_input("Par disponible [Nm]", value=float(T_nom), step=1.0, format="%.2f")
+
+rampa_vdf = st.sidebar.number_input("Rampa VDF [rpm/s] (motor)", min_value=1.0, value=300.0, step=1.0, format="%.2f")
+
+# -----------------------------------
+# Paso 1) Inercia equivalente (con sustitución)
+# -----------------------------------
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown("**1) Inercia equivalente en el eje del motor**")
+    st.latex(r"J_{\mathrm{eq}} = J_m + J_{\mathrm{driver}} + \dfrac{J_{\mathrm{driven}}+J_{\mathrm{imp}}}{r^2}")
+with c2:
+    st.markdown("**Sustitución:**")
     st.latex(
-        rf"\dot{{n}}_{{\mathrm{{torque}}}}"
-        rf"=\frac{{60}}{{2\pi}}\cdot\frac{{{T_disp:.2f}}}{{{J_eq:.2f}}}"
-        rf"= {n_dot_sin:.2f}\;\mathrm{{rpm/s}}"
+        rf"J_{{\mathrm{{eq}}}} = {J_m:.2f} + {J_drv:.2f} + \dfrac{{{J_drn:.2f}+{J_imp:.2f}}}{{({r:.2f})^2}}"
+        rf" \;\Rightarrow\; {J_eq:.2f}\;\mathrm{{kg\cdot m^2}}"
     )
-    st.latex(rf"t_{{\mathrm{{par}}}}=\frac{{{dn_sin:.2f}}}{{{n_dot_sin:.2f}}}= {t_par_sin:.2f}\;\mathrm{{s}}")
-    st.latex(rf"t_{{\mathrm{{rampa}}}}=\frac{{{dn_sin:.2f}}}{{{rampa_vdf:.2f}}}= {t_ramp_sin:.2f}\;\mathrm{{s}}")
 
-# --- Resultados alineados en una misma línea (en verde) ---
+# -----------------------------------
+# Paso 2) Aceleración debida al par (sin hidráulica)
+# -----------------------------------
+dn = max(n_fin_m - n_ini_m, 0.0)
+n_dot = (60.0/(2.0*math.pi))*T_disp/max(J_eq,1e-12)   # rpm/s
+t_par = dn/max(n_dot,1e-12)
+t_ramp = dn/max(rampa_vdf,1e-12)
+t_final = max(t_par, t_ramp)
+
+c3, c4 = st.columns(2)
+with c3:
+    st.markdown("**2) Aceleración por par**")
+    st.latex(r"\dot{n}_{\mathrm{torque}}=\dfrac{60}{2\pi}\,\dfrac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}")
+with c4:
+    st.markdown("**Sustitución:**")
+    st.latex(
+        rf"\dot{{n}}_{{\mathrm{{torque}}}}=\frac{{60}}{{2\pi}}\cdot\frac{{{T_disp:.2f}}}{{{J_eq:.2f}}}"
+        rf"= {n_dot:.2f}\;\mathrm{{rpm/s}}"
+    )
+
+# -----------------------------------
+# Paso 3) Tiempos (par / rampa / final)
+# -----------------------------------
+c5, c6 = st.columns(2)
+with c5:
+    st.markdown("**3) Tiempos de respuesta**")
+    st.latex(r"t_{\mathrm{par}}=\dfrac{\Delta n}{\dot{n}_{\mathrm{torque}}},\qquad"
+             r"t_{\mathrm{rampa}}=\dfrac{\Delta n}{\mathrm{rampa}_{\mathrm{VDF}}},\qquad"
+             r"t_{\mathrm{final}}=\max\!\left(t_{\mathrm{par}},t_{\mathrm{rampa}}\right)")
+with c6:
+    st.markdown("**Sustitución:**")
+    st.latex(rf"\Delta n = {dn:.2f}\;\mathrm{{rpm}}")
+    st.latex(rf"t_{{\mathrm{{par}}}}=\frac{{{dn:.2f}}}{{{n_dot:.2f}}}= {t_par:.2f}\;\mathrm{{s}}")
+    st.latex(rf"t_{{\mathrm{{rampa}}}}=\frac{{{dn:.2f}}}{{{rampa_vdf:.2f}}}= {t_ramp:.2f}\;\mathrm{{s}}")
+
 st.markdown("---")
+
+# -----------------------------------
+# Resumen alineado (misma línea, símbolos idénticos y en verde)
+# -----------------------------------
 r1, r2, r3, r4, r5 = st.columns(5)
 with r1:
-    st.latex(rf"\color{{green}}{{\Delta n = {dn_sin:.2f}\ \mathrm{{rpm}}}}")
+    st.latex(rf"\color{{green}}{{\Delta n = {dn:.2f}\ \mathrm{{rpm}}}}")
 with r2:
-    st.latex(rf"\color{{green}}{{\dot{{n}}_{{\mathrm{{torque}}}}= {n_dot_sin:.2f}\ \mathrm{{rpm/s}}}}")
+    st.latex(rf"\color{{green}}{{\dot{{n}}_{{\mathrm{{torque}}}}= {n_dot:.2f}\ \mathrm{{rpm/s}}}}")
 with r3:
-    st.latex(rf"\color{{green}}{{t_{{\mathrm{{par}}}}= {t_par_sin:.2f}\ \mathrm{{s}}}}")
+    st.latex(rf"\color{{green}}{{t_{{\mathrm{{par}}}}= {t_par:.2f}\ \mathrm{{s}}}}")
 with r4:
-    st.latex(rf"\color{{green}}{{t_{{\mathrm{{rampa}}}}= {t_ramp_sin:.2f}\ \mathrm{{s}}}}")
+    st.latex(rf"\color{{green}}{{t_{{\mathrm{{rampa}}}}= {t_ramp:.2f}\ \mathrm{{s}}}}")
 with r5:
-    st.latex(rf"\boxed{{\color{{green}}{{t_{{\mathrm{{final}}}}= {t_fin_sin:.2f}\ \mathrm{{s}}}}}}")
+    st.latex(rf"\boxed{{\color{{green}}{{t_{{\mathrm{{final}}}}= {t_final:.2f}\ \mathrm{{s}}}}}}")
 
-st.caption("En esta sección aún no se incluye el par hidráulico de la bomba (solo la respuesta por inercia del tren motriz).")
-st.markdown("---")
+st.caption("En esta sección se considera solo la respuesta inercial del tren motriz (sin par hidráulico).")
 
+# -----------------------------------
+# (Opcional) Enlace al modelo hidráulico
+# -----------------------------------
+with st.expander("Extensión opcional: incluir la curva del sistema (H(Q)) y la eficiencia η(Q)"):
+    st.markdown(
+        "- Define la **curva del sistema**: " +
+        r"$H(Q)=H_0+K\,Q^2$." + "\n" +
+        "- Define la **eficiencia** vs. caudal: " +
+        r"$\eta(Q)=\eta_a+\eta_b Q+\eta_c Q^2$." + "\n" +
+        "- Con potencia hidráulica " +
+        r"$P_h=\rho g\,Q\,H/\eta$ y $P=\tau\,\omega$, resulta " +
+        r"$\tau_{\mathrm{load}}(Q,\omega)$.\n" +
+        "- Integra la ecuación de movimiento " +
+        r"$J_{\mathrm{eq}}\dot{\omega}=T_{\mathrm{disp}}-\tau_{\mathrm{load}}(\omega)$ " +
+        "para obtener el tiempo real con hidráulica."
+    )
 
 
 # ------------------------------
