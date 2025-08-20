@@ -42,10 +42,50 @@ def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
 # ------------------------------
-# Carga de datos
+# Carga de datos (robusta a nombres de hoja)
 # ------------------------------
 DATA_FILE = "bombas_dataset_with_torque_params.xlsx"
-df = pd.read_excel(DATA_FILE, sheet_name="dataSet")
+
+@st.cache_data(show_spinner=True)
+def load_df(path: str) -> pd.DataFrame:
+    import re
+    import pandas as pd
+
+    # Abrir libro y listar hojas
+    xls = pd.ExcelFile(path, engine="openpyxl")
+    sheet_names = xls.sheet_names
+
+    # Heurística de selección:
+    # 1) preferir coincidencia exacta "dataset" (case-insensitive)
+    # 2) luego alguna hoja que contenga "dataset" o "data set" o "data"
+    # 3) si nada, usar la primera hoja
+    sheet_pick = None
+    lower = [s.lower() for s in sheet_names]
+    if "dataset" in lower:
+        sheet_pick = sheet_names[lower.index("dataset")]
+    else:
+        cand = [s for s in sheet_names if re.search(r"(data\s*set|dataset|data)", s, re.I)]
+        sheet_pick = cand[0] if cand else sheet_names[0]
+
+    df = pd.read_excel(path, sheet_name=sheet_pick, engine="openpyxl")
+    # Normalizar nombres de columnas (sin espacios extremos)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df, sheet_pick, sheet_names
+
+try:
+    df, used_sheet, all_sheets = load_df(DATA_FILE)
+    st.info(f"Archivo **{DATA_FILE}** cargado desde la hoja **{used_sheet}** (disponibles: {', '.join(all_sheets)}).")
+except FileNotFoundError:
+    st.error(f"No encontré **{DATA_FILE}** en la raíz del proyecto.")
+    st.stop()
+except Exception as e:
+    st.error(f"Problema al abrir **{DATA_FILE}**: {e}")
+    st.stop()
+
+def get_tag_column(df):
+    # Por definición acordada: la primera columna es el TAG
+    return df.columns[0]
+
 col_tag = get_tag_column(df)
 tags = df[col_tag].astype(str).tolist()
 
