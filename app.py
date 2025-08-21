@@ -1,376 +1,540 @@
-# -*- coding: utf-8 -*-
-"""
-Memoria de Cálculo – Tiempo de reacción (VDF)
-App Streamlit con:
-  • Lectura de dataset Excel `bombas_dataset_with_torque_params.xlsx`
-  • Resumen de parámetros por TAG (motor, transmisión, bomba, sistema)
-  • Cálculo inercial (sin e hidráulica) + tiempos (t_par, t_rampa)
-  • Gráfico Plotly con 3 ejes (Q, n_bomba, P) — FIX: yaxis3.position ∈ [0,1]
-  • Descargas CSV en memoria (sin rutas temporales) — evita MediaFileHandler
-  • FIX warnings: raw strings en LaTeX/Markdown con \( \)
-
-Nota: el código tolera columnas faltantes usando valores por defecto y
-parsers robustos para numéricos en string.
-"""
+# app.py
+# ──────────────────────────────────────────────────────────────────────────────
+# Memoria de Cálculo – Tiempo de reacción de bombas (VDF)
+# App “todo-en-uno” con:
+#  1) Lectura del dataset `bombas_dataset_with_torque_params.xlsx`
+#  2) Resumen de parámetros por TAG (motor, transmisión, bomba, sistema)
+#  3) Respuesta inercial + VDF (fórmulas LaTeX y métricas clave)
+#  4) Respuesta con hidráulica (modelo sencillo): integra J_eq·ω̇ = T_disp − T_pump/r
+#  5) Gráfico interactivo (Plotly) con 3 ejes y descarga de reportes por bytes
+# ──────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
 
 import io
 import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-# Fallback elegante si plotly no está disponible (no debería pasar, pero por si acaso)
+# Plotly (si fallara la import, mostramos un mensaje y seguimos con cálculo)
 try:
     import plotly.graph_objects as go
-    PLOTLY_OK = True
-except Exception:  # pragma: no cover
-    PLOTLY_OK = False
+except Exception as e:
+    go = None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuración de página
 # ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Memoria de Cálculo – Tiempo de reacción (VDF)",
-    page_icon="🧮",
+    page_icon="⏱️",
     layout="wide",
 )
 
-st.title("Memoria de Cálculo – Tiempo de reacción (VDF)")
-st.caption(
-    r"Aplicación para estimar tiempos de reacción de bombas con VDF, usando "
-    r"parámetros de motor, transmisión y curva de bomba."
+st.title("⏱️ Tiempo de reacción de bombas con VDF")
+st.write(
+    "Herramienta para estimar tiempos de reacción considerando inercia, rampa VDF "
+    "y carga hidráulica simplificada."
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Utilidades
 # ──────────────────────────────────────────────────────────────────────────────
-_num_re = re.compile(r"[^\d\.\-eE+]")
 
-def get_num(x, default: float = 0.0) -> float:
-    """Parsea un número desde múltiples formatos (espacios, comas, unidades).
-    - Si x es NaN → default
-    - Si ya es número → float(x)
-    - Si es string → limpia espacios, no-break-space, cambia coma por punto y
-      elimina cualquier carácter no numérico (excepto ., -, e/E, +).
-    """
+def get_num(x: Any) -> float:
+    """Convierte texto/num a float de forma robusta (admite coma decimal, espacios, etc.)."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return 0.0
+    if isinstance(x, (int, float, np.floating)):
+        return float(x)
+    s = str(x).strip().replace(" ", "").replace("\u00a0", "")
+    s = s.replace(",", ".")
+    s = re.sub(r"[^\d\.\-eE+]", "", s)
     try:
-        if x is None:
-            return float(default)
-        if isinstance(x, (int, float, np.number)):
-            if pd.isna(x):
-                return float(default)
-            return float(x)
-        s = str(x).strip().replace(" ", "").replace("\u00a0", "")
-        s = s.replace(",", ".")
-        s = _num_re.sub("", s)
-        if s in ("", ".", "+", "-", "+.", "-."):
-            return float(default)
         return float(s)
     except Exception:
-        return float(default)
+        return 0.0
 
 
 def csv_bytes_from_df(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
+    return df.to_csv(index=False).encode("utf-8")
 
 
-def badge(value: str | float, unidad: str, etiqueta: str):
-    """Renderiza una "badge" simple con etiqueta, valor y unidad."""
-    if isinstance(value, (int, float, np.floating)):
-        value_str = f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
-    else:
-        value_str = str(value)
+def show_badge(value_text: str, unit: str, label: str) -> None:
+    """Badge básico en HTML (inline)."""
     st.markdown(
-        f"<div style='display:inline-block;padding:6px 10px;margin:4px;"
-        f"background:#f6f6f6;border:1px solid #ddd;border-radius:10px;"
-        f"font-family:ui-monospace,monospace;font-size:0.9rem;'>"
-        f"<b>{etiqueta}</b>: {value_str} <span style='opacity:.7'>{unidad}</span>"
-        f"</div>",
+        f"""
+        <div style="
+            display:inline-block;
+            padding:6px 10px;
+            margin:4px 6px 4px 0;
+            border-radius:12px;
+            background:#f0f2f6;
+            border:1px solid #e0e3e8;
+            font-size:0.9rem;">
+            <strong>{label}:</strong> {value_text} <span style="opacity:.7">{unit}</span>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
 @dataclass
-class Params:
-    TAG: str = "TAG"
-    J_m: float = 0.0             # kg·m²
-    J_driver: float = 0.0        # kg·m²
-    J_driven: float = 0.0        # kg·m²
-    J_imp: float = 0.0           # kg·m²
-    r: float = 1.0               # relación = n_motor / n_bomba
-    H0: float = 0.0              # m
-    K: float = 0.0               # coef. curva m + K*(Q/3600)^2
-    T_disp: float = 0.0          # N·m (torque disponible en motor)
-    eta: float = 0.7             # eficiencia hidráulica
+class TagParams:
+    TAG: str
+    # Motor / transmisión / bomba
+    J_m: float           # [kg·m²] Inercia motor
+    J_driver: float      # [kg·m²] Inercia transmisión (acopl./reductor, lado motor)
+    J_driven: float      # [kg·m²] Inercia eje bomba (lado bomba)
+    J_imp: float         # [kg·m²] Inercia impulsor adicional (lado bomba)
+    n_motor_nom: float   # [rpm] nominal motor
+    n_bomba_nom: float   # [rpm] nominal bomba
+    P_motor_kw: float    # [kW] potencia nominal motor (para estimar T_disp si no hay)
+    T_disp: float        # [Nm] par disponible (constante simplificado)
+    # Curva bomba y sistema
+    Q_nom_m3h: float     # [m³/h] caudal nominal
+    H0_m: float          # [m] intersección con eje H
+    K: float             # [-] coef. cuadrático (si Q en m³/h, ver fórmula)
+    eta_h: float         # [-] eficiencia hidráulica global
+    rho_kgm3: float      # [kg/m³] densidad
+    Q_min_m3h: float     # [m³/h] clamp inferior
+    Q_max_m3h: float     # [m³/h] clamp superior
 
-    # Nominales para escalado (opcionales)
-    n_bomba_nom: float = 1500.0  # rpm
-    Q_nom: float = 0.0           # m3/h a nominal (si existe)
+    @property
+    def r(self) -> float:
+        """Relación r = n_motor / n_bomba."""
+        n_b = self.n_bomba_nom if self.n_bomba_nom > 0 else 1.0
+        return max(self.n_motor_nom, 1e-6) / n_b
+
+    @property
+    def J_eq(self) -> float:
+        """Inercia equivalente referida al eje del motor."""
+        return self.J_m + self.J_driver + (self.J_driven + self.J_imp) / max(self.r**2, 1e-9)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Lectura de dataset
+# Carga de datos
 # ──────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def load_default_excel() -> Optional[pd.DataFrame]:
+
+@st.cache_data
+def load_default_df() -> pd.DataFrame:
+    # DF de ejemplo si el archivo no está; columnas esperadas.
+    data = [
+        {
+            "TAG": "PU-101",
+            "J_m": 0.45,
+            "J_driver": 0.05,
+            "J_driven": 0.30,
+            "J_imp": 0.15,
+            "n_motor_nom": 1500.0,
+            "n_bomba_nom": 1000.0,
+            "P_motor_kw": 90.0,
+            "T_disp": 0.0,  # 0 => estimar desde P y n
+            "Q_nom_m3h": 250.0,
+            "H0_m": 30.0,
+            "K": 0.002,     # si Q está en m³/h se usa (Q/3600)^2
+            "eta_h": 0.72,
+            "rho_kgm3": 1000.0,
+            "Q_min_m3h": 20.0,
+            "Q_max_m3h": 450.0,
+        },
+        {
+            "TAG": "PU-102",
+            "J_m": 0.60,
+            "J_driver": 0.06,
+            "J_driven": 0.28,
+            "J_imp": 0.12,
+            "n_motor_nom": 1800.0,
+            "n_bomba_nom": 1200.0,
+            "P_motor_kw": 110.0,
+            "T_disp": 0.0,
+            "Q_nom_m3h": 300.0,
+            "H0_m": 28.0,
+            "K": 0.0025,
+            "eta_h": 0.70,
+            "rho_kgm3": 1000.0,
+            "Q_min_m3h": 30.0,
+            "Q_max_m3h": 500.0,
+        },
+    ]
+    return pd.DataFrame(data)
+
+
+@st.cache_data
+def load_dataset(upload: io.BytesIO | None) -> pd.DataFrame:
+    # Si subieron archivo, lo usamos; si no, intentamos ruta por defecto; si no, DF ejemplo.
+    if upload is not None:
+        try:
+            return pd.read_excel(upload)
+        except Exception:
+            upload.seek(0)
+            try:
+                return pd.read_csv(upload)
+            except Exception:
+                pass
+
+    # Intento de ruta por defecto del repo
     try:
         return pd.read_excel("bombas_dataset_with_torque_params.xlsx")
     except Exception:
-        return None
+        return load_default_df()
 
 
-uploaded = st.file_uploader(
-    "📄 Subí el dataset Excel (hoja con parámetros)", type=["xlsx", "xls"],
-    help="Si no subís nada, intentaré leer 'bombas_dataset_with_torque_params.xlsx' del repo."
-)
+def row_to_params(row: pd.Series) -> TagParams:
+    # Obtención robusta de columnas con defaults si no existen.
+    def gv(col: str, default: float = 0.0) -> float:
+        return get_num(row[col]) if col in row else default
 
-if uploaded is not None:
-    try:
-        df_raw = pd.read_excel(uploaded)
-        st.success("Dataset cargado desde archivo subido.")
-    except Exception as e:
-        st.error(f"No se pudo leer el Excel subido: {e}")
-        df_raw = None
-else:
-    df_raw = load_default_excel()
-    if df_raw is not None:
-        st.info("Usando dataset por defecto del repositorio.")
-
-if df_raw is None or df_raw.empty:
-    st.warning("No se encontró dataset. Se generará uno de ejemplo para probar la app.")
-    df_raw = pd.DataFrame(
-        {
-            "TAG": ["B-101", "B-102"],
-            "J_m_kgm2": [0.35, 0.50],
-            "J_driver_kgm2": [0.05, 0.08],
-            "J_driven_kgm2": [0.18, 0.22],
-            "J_imp_kgm2": [0.07, 0.09],
-            "r": [1.00, 1.00],
-            "H0_m": [20.0, 25.0],
-            "K_m": [-0.0004, -0.00035],  # curva típica decreciente vs Q
-            "T_disp_Nm": [250.0, 300.0],
-            "eta": [0.72, 0.70],
-            "n_bomba_nom_rpm": [1500, 1500],
-            "Q_nom_m3h": [400.0, 450.0],
-        }
+    return TagParams(
+        TAG=str(row.get("TAG", "SIN_TAG")),
+        J_m=gv("J_m"),
+        J_driver=gv("J_driver"),
+        J_driven=gv("J_driven"),
+        J_imp=gv("J_imp"),
+        n_motor_nom=max(gv("n_motor_nom", 1500.0), 1e-6),
+        n_bomba_nom=max(gv("n_bomba_nom", 1000.0), 1e-6),
+        P_motor_kw=max(gv("P_motor_kw", 75.0), 0.0),
+        T_disp=gv("T_disp"),  # si 0 -> estimar
+        Q_nom_m3h=max(gv("Q_nom_m3h", 200.0), 1e-9),
+        H0_m=gv("H0_m", 25.0),
+        K=gv("K", 0.002),
+        eta_h=min(max(gv("eta_h", 0.70), 0.05), 0.95),
+        rho_kgm3=max(gv("rho_kgm3", 1000.0), 1.0),
+        Q_min_m3h=max(gv("Q_min_m3h", 10.0), 0.0),
+        Q_max_m3h=max(gv("Q_max_m3h", 600.0), 0.0),
     )
-
-# Normalizamos nombres (para tolerar variantes)
-cols = {c.lower(): c for c in df_raw.columns}
-
-
-def first_existing(*names: str) -> Optional[str]:
-    for n in names:
-        key = n.lower()
-        if key in cols:
-            return cols[key]
-    return None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Parámetros globales (sidebar)
+# Sidebar
 # ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Ajustes de simulación")
+    st.header("⚙️ Entradas")
+    up = st.file_uploader("Subir dataset (.xlsx o .csv)", type=["xlsx", "csv"])
+    df = load_dataset(up)
 
-    rampa_vdf = st.slider("Rampa VDF [rpm/s]", min_value=10, max_value=1000, value=200, step=10)
-    n_ini = st.number_input("n_motor inicial [rpm]", min_value=0, max_value=6000, value=0, step=10)
-    n_obj = st.number_input("n_motor objetivo [rpm]", min_value=100, max_value=6000, value=1500, step=50)
+    if "TAG" not in df.columns:
+        st.error("El dataset debe tener una columna `TAG`.")
+        st.stop()
 
-    rho = st.number_input("Densidad ρ [kg/m³]", min_value=500.0, max_value=2000.0, value=1000.0, step=10.0)
-    g = 9.81
-    dt = st.number_input("∆t [s]", min_value=0.005, max_value=0.5, value=0.02, step=0.005, format="%.3f")
-    t_max = st.number_input("t máx [s]", min_value=1.0, max_value=120.0, value=20.0, step=1.0)
+    tag_list = sorted(df["TAG"].astype(str).unique().tolist())
+    sel_tag = st.selectbox("TAG", options=tag_list, index=0)
+
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        n_ini = st.number_input("n inicial bomba [rpm]", value=0.0, min_value=0.0, step=10.0)
+    with col_r2:
+        n_fin = st.number_input("n objetivo bomba [rpm]", value=1000.0, min_value=1.0, step=10.0)
+
+    rampa_vdf = st.slider("Rampa VDF [rpm/s] (motor)", min_value=1, max_value=500, value=200, step=5)
+
+    t_max = st.slider("t_max integración [s]", min_value=1, max_value=120, value=30, step=1)
+    dt = st.select_slider("dt [s]", options=[0.001, 0.002, 0.005, 0.01, 0.02], value=0.01)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Construcción de tabla limpia + selección de TAG
+# Parámetros del TAG seleccionado
 # ──────────────────────────────────────────────────────────────────────────────
+row = df[df["TAG"].astype(str) == str(sel_tag)].iloc[0]
+params = row_to_params(row)
 
-def row_to_params(row: pd.Series) -> Params:
-    return Params(
-        TAG=str(row.get(first_existing("TAG") or "TAG", "TAG")),
-        J_m=get_num(row.get(first_existing("J_m_kgm2", "J_m", "Jmotor"), 0.0)),
-        J_driver=get_num(row.get(first_existing("J_driver_kgm2", "J_driver"), 0.0)),
-        J_driven=get_num(row.get(first_existing("J_driven_kgm2", "J_driven"), 0.0)),
-        J_imp=get_num(row.get(first_existing("J_imp_kgm2", "J_imp"), 0.0)),
-        r=max(get_num(row.get(first_existing("r", "ratio", "relacion"), 1.0)), 1e-6),
-        H0=get_num(row.get(first_existing("H0_m", "H0"), 0.0)),
-        K=get_num(row.get(first_existing("K_m", "K"), 0.0)),
-        T_disp=get_num(row.get(first_existing("T_disp_Nm", "Tdisp", "Torque"), 0.0)),
-        eta=np.clip(get_num(row.get(first_existing("eta"), 0.7), 0.7), 0.05, 0.99),
-        n_bomba_nom=get_num(row.get(first_existing("n_bomba_nom_rpm", "n_nom_bomba", "n_bomba_nom"), 1500.0)),
-        Q_nom=get_num(row.get(first_existing("Q_nom_m3h", "Q_nom"), 0.0)),
-    )
+st.subheader(f"📌 Parámetros – **{params.TAG}**")
 
+# Ecuación J_eq
+st.latex(r"J_{\mathrm{eq}} = J_m + J_{\mathrm{driver}} + \dfrac{J_{\mathrm{driven}}+J_{\mathrm{imp}}}{r^2}")
+st.caption(r"$r = n_{\mathrm{motor}}/n_{\mathrm{bomba}}$; las inercias del lado bomba giran a $\omega_p=\omega_m/r$.")
 
-params_list = [row_to_params(r) for _, r in df_raw.iterrows()]
-
-if not params_list:
-    st.stop()
-
-TAGs = [p.TAG for p in params_list]
-col_sel1, col_sel2 = st.columns([1, 2])
-with col_sel1:
-    sel_tag = st.selectbox("TAG", TAGs, index=0)
-sel_params = next(p for p in params_list if p.TAG == sel_tag)
+# Badges (formateo correcto del H0_m como string)
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    show_badge(f"{params.J_eq:.3f}", "kg·m²", "J_eq")
+    show_badge(f"{params.r:.2f}", "", "Relación r")
+with c2:
+    show_badge(f"{params.n_motor_nom:.0f}", "rpm", "n_motor_nom")
+    show_badge(f"{params.n_bomba_nom:.0f}", "rpm", "n_bomba_nom")
+with c3:
+    show_badge(f"{params.Q_nom_m3h:.1f}", "m³/h", "Q_nom")
+    show_badge(f"{params.H0_m:.2f}", "m", "H0")
+with c4:
+    show_badge(f"{params.K:.4f}", "–", "K")
+    show_badge(f"{params.eta_h:.2f}", "–", "η")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Cálculos base
+# Métricas inerciales (sin hidráulica): t_par y t_rampa
 # ──────────────────────────────────────────────────────────────────────────────
-# Inercia equivalente (lado bomba reflejado al motor)
-J_eq = sel_params.J_m + sel_params.J_driver + (sel_params.J_driven + sel_params.J_imp) / (sel_params.r ** 2)
 
-st.subheader("Parámetros del sistema")
-with st.expander("Ver resumen del TAG seleccionado", expanded=True):
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        badge(sel_params.TAG, "", "TAG")
-        badge(J_eq, "kg·m²", "J_eq")
-    with c2:
-        badge(sel_params.r, r"", "r = n_m/n_p")
-        badge(sel_params.T_disp, "N·m", "T_disp")
-    with c3:
-        badge(sel_params.H0, "m", "H0")
-        badge(sel_params.K, r"m·(h/m³)²", "K curva")
-    with c4:
-        badge(sel_params.eta, "-", "η")
-        badge(sel_params.n_bomba_nom, "rpm", "n_bomba_nom")
+st.markdown("### ⚡ Estimación inercial vs rampa VDF")
+
+# Estimar T_disp si es 0: T = 9550 * P[kW] / n[rpm] a nominal motor
+T_disp = params.T_disp
+if T_disp <= 0.0:
+    T_disp = 9550.0 * max(params.P_motor_kw, 1e-9) / max(params.n_motor_nom, 1e-6)
+
+omega_dot_torque = (T_disp / max(params.J_eq, 1e-9))  # [rad/s²] sobre el eje motor
+# Pasar a \dot n motor [rpm/s]: \dot n = (60/2π)·\dot ω
+n_dot_torque_motor = (60.0 / (2.0 * np.pi)) * omega_dot_torque
+
+# Δn motor equivalente del salto en n bomba: Δn_motor = r * Δn_bomba
+delta_n_bomba = max(n_fin - n_ini, 0.0)
+delta_n_motor = params.r * delta_n_bomba
+
+t_par = delta_n_motor / max(n_dot_torque_motor, 1e-9)         # limitado por par
+t_rampa = delta_n_motor / max(float(rampa_vdf), 1e-9)          # limitado por rampa VDF
+t_inercial_aprox = max(t_par, t_rampa)
+
+mcol1, mcol2, mcol3 = st.columns(3)
+with mcol1:
+    st.metric("t_par (solo par)", f"{t_par:.2f} s")
+with mcol2:
+    st.metric("t_rampa (VDF)", f"{t_rampa:.2f} s")
+with mcol3:
+    st.metric("t_reacción aprox", f"{t_inercial_aprox:.2f} s")
 
 st.caption(
-    r"Las inercias del lado bomba giran a $\omega_p = \omega_m/r$. Igualando energías "
-    r"cinéticas a una $\omega_m$ común se obtiene la división por $r^2$."
+    r"Ecuaciones: $\dot n_{\mathrm{torque}}=\frac{60}{2\pi}\frac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}$, "
+    r"$t_{\mathrm{par}}=\frac{\Delta n_{\mathrm{motor}}}{\dot n_{\mathrm{torque}}}$, "
+    r"$t_{\mathrm{rampa}}=\frac{\Delta n_{\mathrm{motor}}}{\mathrm{rampa}_{\mathrm{VDF}}}$."
 )
 
-# Tiempos característicos (analíticos)
-Delta_n = max(n_obj - n_ini, 0.0)
-ndot_torque = (60.0 / (2.0 * np.pi)) * (sel_params.T_disp / max(J_eq, 1e-9))  # rpm/s si T_disp limita
+# ──────────────────────────────────────────────────────────────────────────────
+# Dinámica con hidráulica (modelo simple)
+# J_eq·ω̇_m = T_disp − T_pump/r
+# con T_pump = ρgQH(Q)/(η ω_p), ω_p=ω_m/r, Q ∝ n_p (afinidad), clamp [Qmin, Qmax]
+# ──────────────────────────────────────────────────────────────────────────────
 
-t_par = Delta_n / max(ndot_torque, 1e-9) if sel_params.T_disp > 0 else np.nan
+st.markdown("---")
+st.subheader("🌊 Integración con hidráulica (modelo simple)")
 
-t_rampa = Delta_n / max(rampa_vdf, 1e-9)
+st.latex(
+    r"J_{eq}\,\dot\omega_m = T_{disp} - \dfrac{T_{pump}}{r}, \qquad "
+    r"T_{pump}=\dfrac{\rho\,g\,Q\,H(Q)}{\eta\,\omega_p}, \; \omega_p=\omega_m/r, \; Q\propto n_p."
+)
+st.caption(
+    r"Se impone además un límite de rampa VDF en el motor: $n_m(t)$ no puede crecer "
+    r"más rápido que $\mathrm{rampa}_{\mathrm{VDF}}$."
+)
 
-with st.expander("Fórmulas empleadas", expanded=False):
-    st.latex(r"J_{\mathrm{eq}} = J_m + J_{\mathrm{driver}} + \dfrac{J_{\mathrm{driven}}+J_{\mathrm{imp}}}{r^2}")
-    st.markdown(r"**Ecuaciones base:** $\dot n_{\mathrm{torque}}=\dfrac{60}{2\pi}\dfrac{T_{disp}}{J_{eq}}$, "
-                r"$t_{par}=\dfrac{\Delta n}{\dot n_{\mathrm{torque}}}$, "
-                r"$t_{rampa}=\dfrac{\Delta n}{\mathrm{rampa}_{VDF}}$. ")
-    st.markdown(r"**Con hidráulica:** $J_{eq}\,\dot\omega_m=T_{disp}-T_{pump}/r$, "
-                r"$T_{pump}=\dfrac{\rho g\,Q\,H(Q)}{\eta\,\omega_p}$, $\omega_p=\omega_m/r$, $Q\propto n_p$.")
+g = 9.81
 
-st.subheader("Tiempos característicos")
-cA, cB, cC = st.columns(3)
-with cA: badge(ndot_torque, "rpm/s", "Ṅ_torque")
-with cB: badge(t_par, "s", "t_par")
-with cC: badge(t_rampa, "s", "t_rampa")
+def H_of_Q(Q_m3h: float, H0: float, K: float) -> float:
+    """Curva H(Q) = H0 + K*(Q/3600)^2 con Q en m³/h, devuelve H en m."""
+    return H0 + K * (Q_m3h / 3600.0) ** 2
+
+def simulate(params: TagParams,
+             n_ini_bomba: float,
+             n_fin_bomba: float,
+             rampa_vdf_motor: float,
+             t_max: float,
+             dt: float,
+             T_disp_const: float) -> Dict[str, np.ndarray]:
+    steps = int(np.ceil(t_max / dt))
+    t = np.zeros(steps + 1)
+    n_b = np.zeros(steps + 1)      # rpm bomba actual
+    n_m = np.zeros(steps + 1)      # rpm motor actual
+    n_cmd_m = np.zeros(steps + 1)  # rpm motor comandada por VDF
+    Q = np.zeros(steps + 1)        # m³/h
+    PkW = np.zeros(steps + 1)      # kW hidráulica
+
+    n_b[0] = max(n_ini_bomba, 0.0)
+    n_m[0] = params.r * n_b[0]
+    n_cmd_m[0] = n_m[0]
+
+    n_fin_m = params.r * max(n_fin_bomba, 1.0)
+
+    for k in range(steps):
+        t[k + 1] = t[k] + dt
+
+        # VDF: referencia de velocidad motor por rampa
+        inc = rampa_vdf_motor * dt
+        n_cmd_m[k + 1] = min(n_cmd_m[k] + inc, n_fin_m)
+
+        # Estado actual
+        omega_m = 2.0 * np.pi * n_m[k] / 60.0
+        omega_p = max(omega_m / max(params.r, 1e-9), 1e-6)
+
+        # Afinidad Q ~ n_bomba
+        n_b[k] = max(n_b[k], 0.0)
+        Q_k = params.Q_nom_m3h * (n_b[k] / max(params.n_bomba_nom, 1e-6))
+        # Clamp hidráulico
+        Q_k = min(max(Q_k, params.Q_min_m3h), params.Q_max_m3h)
+
+        # Curva de bomba
+        H = H_of_Q(Q_k, params.H0_m, params.K)
+
+        # Par de bomba (lado bomba): T_pump = ρ g Q H / (η ω_p)
+        Q_m3s = Q_k / 3600.0
+        T_pump = (params.rho_kgm3 * g * Q_m3s * H) / max(params.eta_h * omega_p, 1e-6)
+
+        # Dinámica en el eje motor
+        domega_m = (T_disp_const - (T_pump / max(params.r, 1e-9))) / max(params.J_eq, 1e-9)
+        omega_m_new = max(omega_m + domega_m * dt, 0.0)
+        n_m_candidate = 60.0 * omega_m_new / (2.0 * np.pi)
+
+        # Limitación por rampa (nunca superar n_cmd_m)
+        n_m[k + 1] = min(n_m_candidate, n_cmd_m[k + 1])
+        n_b[k + 1] = n_m[k + 1] / max(params.r, 1e-9)
+
+        # Potencia hidráulica
+        Q_k_next = params.Q_nom_m3h * (n_b[k + 1] / max(params.n_bomba_nom, 1e-6))
+        Q_k_next = min(max(Q_k_next, params.Q_min_m3h), params.Q_max_m3h)
+        H_next = H_of_Q(Q_k_next, params.H0_m, params.K)
+        PkW[k + 1] = (params.rho_kgm3 * g * (Q_k_next / 3600.0) * H_next) / 1000.0
+
+        Q[k + 1] = Q_k_next
+
+        # Si ya alcanzamos n_fin_m (tolerancia), podemos cortar
+        if n_m[k + 1] >= n_fin_m - 1e-6 and n_cmd_m[k + 1] >= n_fin_m - 1e-6:
+            # recortar arrays
+            last = k + 1
+            t = t[: last + 1]
+            n_b = n_b[: last + 1]
+            n_m = n_m[: last + 1]
+            n_cmd_m = n_cmd_m[: last + 1]
+            Q = Q[: last + 1]
+            PkW = PkW[: last + 1]
+            break
+
+    return {"t": t, "n_b": n_b, "n_m": n_m, "n_cmd_m": n_cmd_m, "Q": Q, "PkW": PkW}
+
+
+sim = simulate(
+    params=params,
+    n_ini_bomba=n_ini,
+    n_fin_bomba=n_fin,
+    rampa_vdf_motor=float(rampa_vdf),
+    t_max=float(t_max),
+    dt=float(dt),
+    T_disp_const=float(T_disp),
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Simulación simple (rampa impuesta en velocidad; hidráulica "estática")
+# Gráfico Plotly con 3 ejes corregidos (sin error de position fuera de [0,1])
 # ──────────────────────────────────────────────────────────────────────────────
-# Para claridad, imponemos n_m(t) por rampa (limitada por objetivo) y derivamos Q,P,H con curvas.
-T = np.arange(0.0, t_max + 1e-9, dt)
-# rampa lineal del motor
-n_m = np.minimum(n_ini + rampa_vdf * T, n_obj)
-# velocidad bomba
-n_p = n_m / max(sel_params.r, 1e-9)
-# caudal ~ proporcional a n_p (si no hay Q_nom, escalamos a 1 m3/h por 100 rpm como dummy)
-if sel_params.Q_nom > 0 and sel_params.n_bomba_nom > 0:
-    Q = (n_p / sel_params.n_bomba_nom) * sel_params.Q_nom
+st.markdown("#### 📈 Curvas de arranque")
+
+if go is None:
+    st.warning("Plotly no está disponible. Se omitirá el gráfico interactivo.")
 else:
-    Q = n_p * 0.01  # 0.01 m3/h por rpm como suposición básica
-
-# Curva de bomba H(Q) = H0 + K*(Q/3600)^2
-H = sel_params.H0 + sel_params.K * (Q / 3600.0) ** 2
-# Potencia hidráulica P = rho*g*Q*H  [W]; convertimos a kW
-P_kW = (rho * g * (Q / 3600.0) * H) / 1000.0
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Gráfico Plotly (3 ejes) – FIX: yaxis3.position dentro de [0,1]
-# ──────────────────────────────────────────────────────────────────────────────
-st.subheader("Respuesta temporal (rampa VDF)")
-
-if PLOTLY_OK:
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=T, y=Q, name="Q [m³/h]", yaxis="y"))
-    fig.add_trace(go.Scatter(x=T, y=n_p, name="n bomba [rpm]", yaxis="y2"))
-    fig.add_trace(go.Scatter(x=T, y=P_kW, name="P hidráulica [kW]", yaxis="y3"))
+    t = sim["t"]
+    Q = sim["Q"]
+    n_p = sim["n_b"]
+    P = sim["PkW"]
+
+    fig.add_trace(go.Scatter(x=t, y=Q, name="Q [m³/h]", yaxis="y"))
+    fig.add_trace(go.Scatter(x=t, y=n_p, name="n bomba [rpm]", yaxis="y2"))
+    fig.add_trace(go.Scatter(x=t, y=P, name="P hidráulica [kW]", yaxis="y3"))
+    fig.add_trace(go.Scatter(x=t, y=sim["n_cmd_m"] / max(params.r, 1e-9),
+                             name="n bomba cmd [rpm]", yaxis="y2",
+                             line=dict(dash="dash")))
 
     fig.update_layout(
         template="plotly_white",
         margin=dict(l=10, r=10, t=10, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
         xaxis=dict(title="Tiempo [s]"),
-        yaxis=dict(title="Q [m³/h]", anchor="x"),  # izquierda
+
+        # Eje izquierdo (Q)
+        yaxis=dict(title="Q [m³/h]", anchor="x"),
+
+        # Eje derecho (n)
         yaxis2=dict(title="n bomba [rpm]", overlaying="y", side="right", anchor="x"),
-        # Tercer eje a la derecha con anchor='free' y position ∈ [0,1]
+
+        # Tercer eje a la derecha con anchor free y position < 1 (FIX)
         yaxis3=dict(title="P [kW]", overlaying="y", side="right", anchor="free", position=0.98),
     )
-
     st.plotly_chart(fig, use_container_width=True)
-else:  # Fallback a Matplotlib (mínimo)
-    import matplotlib.pyplot as plt  # type: ignore
 
-    fig, ax1 = plt.subplots(figsize=(9, 4.5))
-    ax2 = ax1.twinx()
-    ax1.plot(T, Q, label="Q [m³/h]")
-    ax2.plot(T, n_p, label="n bomba [rpm]")
-    ax1.set_xlabel("Tiempo [s]")
-    ax1.set_ylabel("Q [m³/h]")
-    ax2.set_ylabel("n bomba [rpm]")
-    fig.tight_layout()
-    st.pyplot(fig)
+st.caption(
+    r"Ecuaciones: $J_{eq}=J_m+J_{driver}+(J_{driven}+J_{imp})/r^2$, "
+    r"$T_{pump}=\frac{\rho g Q H(Q)}{\eta\,\omega_p}$, con $Q\propto n_p$ y "
+    r"$H(Q)=H_0+K\left(\frac{Q}{3600}\right)^2$."
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Reportes CSV (en memoria) – evita MediaFileHandler
+# Reportes y descargas (por BYTES, sin rutas -> evita MediaFileHandler)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def resumen_por_params(p: Params) -> dict:
-    r_local = max(p.r, 1e-9)
-    J_eq_local = p.J_m + p.J_driver + (p.J_driven + p.J_imp) / (r_local ** 2)
-    ndot = (60.0 / (2.0 * np.pi)) * (p.T_disp / max(J_eq_local, 1e-9)) if p.T_disp > 0 else np.nan
-    tpar = (Delta_n / ndot) if (p.T_disp > 0 and ndot > 0) else np.nan
-    tramp = Delta_n / max(rampa_vdf, 1e-9)
-    return {
-        "TAG": p.TAG,
-        "J_eq_kgm2": J_eq_local,
-        "r_nmotor_nbomba": r_local,
-        "T_disp_Nm": p.T_disp,
-        "ndot_torque_rpmps": ndot,
-        "t_par_s": tpar,
-        "t_rampa_s": tramp,
-        "H0_m": p.H0,
-        "K_m": p.K,
-        "eta": p.eta,
-        "n_bomba_nom_rpm": p.n_bomba_nom,
-        "Q_nom_m3h": p.Q_nom,
+st.markdown("---")
+st.subheader("📥 Reportes")
+
+# Reporte del TAG actual (resumen + última simulación)
+rep_tag = pd.DataFrame(
+    {
+        "TAG": [params.TAG],
+        "J_eq_kgm2": [params.J_eq],
+        "r": [params.r],
+        "T_disp_Nm": [T_disp],
+        "n_ini_bomba_rpm": [n_ini],
+        "n_fin_bomba_rpm": [n_fin],
+        "rampa_vdf_motor_rpmps": [rampa_vdf],
+        "t_par_s": [t_par],
+        "t_rampa_s": [t_rampa],
+        "t_reaccion_aprox_s": [max(t_par, t_rampa)],
     }
+)
 
-# Reporte del TAG seleccionado
-res_sel = pd.DataFrame([resumen_por_params(sel_params)])
-col_dl1, col_dl2 = st.columns([1, 2])
-with col_dl1:
-    st.download_button(
-        "⬇️ Descargar reporte (TAG seleccionado)",
-        data=csv_bytes_from_df(res_sel),
-        file_name=f"reporte_{sel_params.TAG}_rampa_{int(rampa_vdf)}rpmps.csv",
-        mime="text/csv",
-    )
+csv_one = csv_bytes_from_df(rep_tag)
 
-# Reporte de todos los TAG
-res_all = pd.DataFrame([resumen_por_params(p) for p in params_list])
+st.download_button(
+    "⬇️ Descargar reporte del TAG seleccionado",
+    data=csv_one,
+    file_name=f"reporte_{params.TAG}_rampa_{int(rampa_vdf)}rpmps.csv",
+    mime="text/csv",
+)
+
+# Reporte para TODOS los TAG con la rampa actual
+def build_all_tags_report(df: pd.DataFrame, rampa: float) -> pd.DataFrame:
+    rows = []
+    for _, r in df.iterrows():
+        p = row_to_params(r)
+        # Estimar T_disp si no hay
+        T = p.T_disp if p.T_disp > 0 else 9550.0 * max(p.P_motor_kw, 1e-9) / max(p.n_motor_nom, 1e-6)
+        omega_dot = T / max(p.J_eq, 1e-9)
+        n_dot = (60.0 / (2.0 * np.pi)) * omega_dot
+        # Δn_motor equivalente para 0 -> n_bomba_nom (referencia común)
+        dnm = p.r * max(p.n_bomba_nom, 1.0)
+        t_par_i = dnm / max(n_dot, 1e-9)
+        t_rampa_i = dnm / max(rampa, 1e-9)
+        rows.append(
+            {
+                "TAG": p.TAG,
+                "J_eq_kgm2": p.J_eq,
+                "r": p.r,
+                "T_disp_Nm": T,
+                "n_obj_bomba_rpm": p.n_bomba_nom,
+                "rampa_vdf_motor_rpmps": rampa,
+                "t_par_s": t_par_i,
+                "t_rampa_s": t_rampa_i,
+                "t_reaccion_aprox_s": max(t_par_i, t_rampa_i),
+                "H0_m": p.H0_m,
+                "K": p.K,
+                "Q_nom_m3h": p.Q_nom_m3h,
+            }
+        )
+    return pd.DataFrame(rows)
+
+rep_all = build_all_tags_report(df, float(rampa_vdf))
+csv_all = csv_bytes_from_df(rep_all)
+
 st.download_button(
     "⬇️ Descargar reporte (todos los TAG, con rampa seleccionada)",
-    data=csv_bytes_from_df(res_all),
+    data=csv_all,
     file_name=f"reporte_todos_los_TAG_rampa_{int(rampa_vdf)}rpmps.csv",
     mime="text/csv",
 )
 
 st.markdown("---")
-
-# Mostrar tabla base (opcional)
-with st.expander("Ver tabla original del dataset", expanded=False):
-    st.dataframe(df_raw, use_container_width=True)
+st.markdown("#### 📝 Notas")
+st.markdown(
+    r"""
+- El modelo hidráulico es intencionalmente simple y usa $Q\propto n_p$ y $H(Q)=H_0+K\left(\frac{Q}{3600}\right)^2$.
+- Si la lectura del dataset trae celdas con texto (comas, unidades), se parsean con una rutina robusta.
+- Los botones de descarga generan **bytes en memoria** (no rutas), evitando errores `MediaFileHandler`.
+- El gráfico Plotly usa un **tercer eje** en `position=0.98` (dentro de [0,1]) para evitar el error de `layout.yaxis.position`.
+"""
+)
