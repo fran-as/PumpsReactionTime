@@ -8,7 +8,9 @@
 #  4) Respuesta con hidráulica (modelo sencillo): integra J_eq·ω̇ = T_disp − T_pump/r
 #  5) Gráfico interactivo (Plotly) con 3 ejes y descarga de reportes por bytes
 # ──────────────────────────────────────────────────────────────────────────────
-
+# =========================
+# Loader de dataset fijo + mapeo a parámetros del modelo
+# =========================
 from __future__ import annotations
 
 import io
@@ -19,6 +21,263 @@ from typing import Tuple, Dict, Any
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+DATASET_PATH = "bombas_dataset_with_torque_params.xlsx"
+
+# Conversión de inercia: 1 lb·ft² = 0.042140110093 kg·m²
+LBFT2_TO_KGM2 = 0.042140110093
+
+def get_num(x: object, default: float = 0.0) -> float:
+    """Convierte valores con coma decimal, espacios, unidades sueltas, etc. a float."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return float(default)
+    if isinstance(x, (int, float, np.number)):
+        return float(x)
+    s = str(x).strip().replace(" ", "").replace("\u00a0", "")
+    # coma decimal -> punto
+    s = s.replace(",", ".")
+    # quita cualquier cosa que no sea dígito, signo, punto o notación científica
+    s = re.sub(r"[^0-9eE+\-\.]", "", s)
+    try:
+        return float(s) if s not in ("", ".", "-", "+") else float(default)
+    except Exception:
+        return float(default)
+
+def as_int(x: object, default: int = 0) -> int:
+    v = get_num(x, default=float(default))
+    return int(round(v))
+
+def j_lbft2_to_kgm2(v_lbft2: object) -> float:
+    return get_num(v_lbft2) * LBFT2_TO_KGM2
+
+def sanitize_eff(x: object) -> float:
+    """
+    Eficiencia en [0..1]. Acepta entrada 0.92, 92, '92%', '0,92', etc.
+    - Si >1.1, se interpreta como % y se divide por 100.
+    - Se recorta al rango [0, 1].
+    """
+    v = get_num(x)
+    if v > 1.1:
+        v = v / 100.0
+    return float(min(max(v, 0.0), 1.0))
+
+def calc_eta_total(row: pd.Series) -> float:
+    # Usa 'eta_total' si existe y parece válida, si no, multiplica eta_a..eta_d
+    if "eta_total" in row and not pd.isna(row["eta_total"]):
+        v = sanitize_eff(row["eta_total"])
+        if 0.01 <= v <= 1.0:
+            return v
+    # producto de eslabones (si alguna falta, get_num -> 0 y producto será 0; protegemos con default=1)
+    parts = []
+    for k in ("eta_a", "eta_b", "eta_c", "eta_d"):
+        if k in row and not pd.isna(row[k]):
+            parts.append(sanitize_eff(row[k]))
+    return float(np.prod(parts)) if parts else 1.0
+
+def calc_K_m_per_m3h2(row: pd.Series) -> float:
+    """
+    Devuelve K en unidades de m/(m^3/h)^2 para usar en: H(Q)=H0 + K * (Q/3600)^2
+    Si hay 'K_m_per_m3h2', la usa; si no, convierte desde 'K_m_s2' multiplicando por 3600^2.
+    """
+    if "K_m_per_m3h2" in row and not pd.isna(row["K_m_per_m3h2"]):
+        return get_num(row["K_m_per_m3h2"])
+    # fallback desde K en m/(m^3/s)^2
+    K_s2 = get_num(row.get("K_m_s2", 0.0))
+    return K_s2 * (3600.0**2)
+
+# -------------------------
+# SCHEMA: Atributos del modelo ↔ columnas del dataset
+# -------------------------
+SCHEMA = {
+    # Identificación / básicos
+    "TAG":                 {"col": "TAG",              "dtype": "str",   "unit": "-",          "desc": "Identificador del equipo"},
+    "brand":               {"col": "brand",            "dtype": "str",   "unit": "-",          "desc": "Marca (tren)"},
+    "train":               {"col": "train",            "dtype": "str",   "unit": "-",          "desc": "Descripción del tren"},
+    "motor_brand":         {"col": "motor_brand",      "dtype": "str",   "unit": "-",          "desc": "Marca motor"},
+    "motor_model":         {"col": "motor_model",      "dtype": "str",   "unit": "-",          "desc": "Modelo motor"},
+    "motorframe":          {"col": "motorframe",       "dtype": "str",   "unit": "-",          "desc": "Frame motor"},
+    "pump_brand":          {"col": "pump_brand",       "dtype": "str",   "unit": "-",          "desc": "Marca bomba"},
+    "pump_model":          {"col": "pump_model",       "dtype": "str",   "unit": "-",          "desc": "Modelo bomba"},
+
+    # Transmisión / geometría (informativos y para chequeos)
+    "r":                   {"col": "r_trans",          "dtype": "float", "unit": "-",          "desc": "Relación n_motor/n_bomba (transmisión)"},
+    "series":              {"col": "series",           "dtype": "str",   "unit": "-",          "desc": "Perfil de correas (5V, etc.)"},
+    "grooves":             {"col": "grooves",          "dtype": "int",   "unit": "-",          "desc": "N° de canales"},
+    "driver_od_in":        {"col": "driver_od_in",     "dtype": "float", "unit": "in",         "desc": "Diámetro polea motriz [in]"},
+    "driven_od_in":        {"col": "driven_od_in",     "dtype": "float", "unit": "in",         "desc": "Diámetro polea conducida [in]"},
+    "centerdistance_mm":   {"col": "centerdistance_mm","dtype": "float", "unit": "mm",         "desc": "Distancia entre centros [mm]"},
+
+    # Motor / eléctricos (informativo)
+    "motor_kw":            {"col": "motor_kw",         "dtype": "float", "unit": "kW",         "desc": "Potencia nominal motor"},
+    "motor_nom_rpm":       {"col": "motor_nom_rpm",    "dtype": "int",   "unit": "rpm",        "desc": "Velocidad nominal motor"},
+    "motor_sf":            {"col": "motor_sf",         "dtype": "float", "unit": "-",          "desc": "Service Factor"},
+    "motor_sf_torque":     {"col": "motor_sf_torque",  "dtype": "float", "unit": "Nm",         "desc": "Torque con SF"},
+    "motor_rated_torque":  {"col": "motor_rated_torque","dtype":"float", "unit": "Nm",         "desc": "Torque nominal"},
+    "motor_rated_current": {"col": "motor_rated_current","dtype":"float","unit": "A",          "desc": "Corriente nominal"},
+    "motor_rating":        {"col": "motor_rating",     "dtype": "str",   "unit": "-",          "desc": "Grado de protección / clase"},
+
+    # Límites de operación (se usan en el modelo)
+    "n_motor_min":         {"col": "motor_n_min_rpm",  "dtype": "int",   "unit": "rpm",        "desc": "n motor mín"},
+    "n_motor_max":         {"col": "motor_n_max_rpm",  "dtype": "int",   "unit": "rpm",        "desc": "n motor máx"},
+    "n_pump_min":          {"col": "pump_n_min_rpm",   "dtype": "int",   "unit": "rpm",        "desc": "n bomba mín"},
+    "n_pump_max":          {"col": "pump_n_max_rpm",   "dtype": "int",   "unit": "rpm",        "desc": "n bomba máx"},
+
+    # Hidráulica (SE USAN en la curva H(Q)=H0 + K*(Q/3600)^2 )
+    "H0_m":                {"col": "H0_m",             "dtype": "float", "unit": "m",          "desc": "Altura a caudal cero (shutoff)"},
+    # 'K' la derivamos con calc_K_m_per_m3h2; lo dejamos en el diccionario final
+    "R2_H":                {"col": "R2_H",             "dtype": "float", "unit": "-",          "desc": "R² ajuste H(Q)"},
+    "eta":                 {"col": "eta_total",        "dtype": "float", "unit": "-",          "desc": "Eficiencia total (si falta, eta_a*eta_b*eta_c*eta_d)"},
+
+    # Inercias (SE USAN en el modelo)
+    "J_m":                 {"col": "motor_j_kgm2",         "dtype": "float", "unit": "kg·m²", "desc": "Inercia motor"},
+    "J_driver_pulley":     {"col": "driverpulley_j_kgm2",  "dtype": "float", "unit": "kg·m²", "desc": "Inercia polea motriz"},
+    "J_driver_bushing":    {"col": "driverbushing_j_kgm2", "dtype": "float", "unit": "kg·m²", "desc": "Inercia buje motriz"},
+    "J_driven_pulley_lbft2":{"col":"drivenpulley_j_lbs_ft2","dtype":"float","unit":"lb·ft²", "desc": "Inercia polea conducida (imperial)"},
+    "J_driven_bushing_lbft2":{"col":"drivenbushing_j_lbs_ft2","dtype":"float","unit":"lb·ft²","desc":"Inercia buje conducido (imperial)"},
+    "J_imp":               {"col": "impeller_j_kgm2",      "dtype": "float", "unit": "kg·m²", "desc": "Inercia rodete"},
+    # Extras informativos
+    "impeller_mass_kg":    {"col": "impeller_mass_kg",     "dtype": "float", "unit": "kg",    "desc": "Masa del rodete"},
+}
+
+def normalize_scalar(colname: str, raw: object, dtype: str):
+    """Normaliza un valor de acuerdo con el dtype declarado en SCHEMA."""
+    if dtype == "str":
+        return "" if (raw is None or (isinstance(raw, float) and np.isnan(raw))) else str(raw).strip()
+    if dtype == "int":
+        return as_int(raw)
+    if dtype == "float":
+        return get_num(raw)
+    return raw
+
+def build_row_params(row: pd.Series) -> dict:
+    """
+    Devuelve los parámetros normalizados que usa el modelo para un TAG.
+    Incluye: r, H0_m, K, eta, inercia desagregada y compuesta, límites de rpm y meta-info útil.
+    """
+    out = {}
+
+    # 1) Campos directos del SCHEMA
+    for key, meta in SCHEMA.items():
+        col = meta["col"]
+        dtype = meta["dtype"]
+        out[key] = normalize_scalar(col, row.get(col, None), dtype)
+
+    # 2) Derivados / limpiezas especiales
+
+    # Relación r (usa r_trans)
+    out["r"] = get_num(row.get("r_trans", out.get("r", 0.0)))
+
+    # Curva H(Q): H0 directo + K en m/(m^3/h)^2
+    out["K"] = calc_K_m_per_m3h2(row)
+
+    # Eficiencia total
+    out["eta"] = calc_eta_total(row)
+
+    # Inercias compuestas
+    #  - Lado motor (driver), ya viene en kg·m²
+    J_driver = get_num(row.get("driverpulley_j_kgm2", 0.0)) + get_num(row.get("driverbushing_j_kgm2", 0.0))
+    #  - Lado bomba (driven), viene en lb·ft² -> convertir
+    J_driven = j_lbft2_to_kgm2(row.get("drivenpulley_j_lbs_ft2", 0.0)) + j_lbft2_to_kgm2(row.get("drivenbushing_j_lbs_ft2", 0.0))
+
+    out["J_driver"] = float(J_driver)
+    out["J_driven"] = float(J_driven)
+
+    # 3) Paquete final que consume el modelo (nombres "canónicos" usados en la app)
+    params_modelo = {
+        "TAG": out["TAG"],
+        # Geometría / transmisión
+        "r": out["r"],
+
+        # Curva H(Q) con Q en m^3/h
+        "H0_m": out["H0_m"],
+        "K": out["K"],            # m/(m^3/h)^2
+        "R2_H": out["R2_H"],
+
+        # Eficiencia global
+        "eta": out["eta"],        # [0..1]
+
+        # Inercias (kg·m²)
+        "J_m": out["J_m"],
+        "J_driver": out["J_driver"],
+        "J_driven": out["J_driven"],
+        "J_imp": out["J_imp"],
+
+        # Límites de operación
+        "n_motor_min": out["n_motor_min"],
+        "n_motor_max": out["n_motor_max"],
+        "n_pump_min":  out["n_pump_min"],
+        "n_pump_max":  out["n_pump_max"],
+
+        # Meta-info útil para UI / reporte
+        "_meta": {
+            "brand": out.get("brand", ""),
+            "train": out.get("train", ""),
+            "motor": {
+                "brand": out.get("motor_brand", ""),
+                "model": out.get("motor_model", ""),
+                "frame": out.get("motorframe", ""),
+                "kw": out.get("motor_kw", 0.0),
+                "nom_rpm": out.get("motor_nom_rpm", 0),
+                "sf": out.get("motor_sf", 0.0),
+                "sf_torque": out.get("motor_sf_torque", 0.0),
+                "rated_torque": out.get("motor_rated_torque", 0.0),
+                "rated_current": out.get("motor_rated_current", 0.0),
+                "rating": out.get("motor_rating", ""),
+            },
+            "pump": {
+                "brand": out.get("pump_brand", ""),
+                "model": out.get("pump_model", ""),
+                "impeller_mass_kg": out.get("impeller_mass_kg", 0.0),
+            },
+            "belt_drive": {
+                "series": out.get("series", ""),
+                "grooves": out.get("grooves", 0),
+                "driver_od_in": out.get("driver_od_in", 0.0),
+                "driven_od_in": out.get("driven_od_in", 0.0),
+                "center_mm": out.get("centerdistance_mm", 0.0),
+            },
+        },
+    }
+
+    # Validaciones suaves (evitan NaNs en el modelo)
+    for k in ("H0_m", "K", "eta", "J_m", "J_driver", "J_driven", "J_imp", "r"):
+        if not np.isfinite(params_modelo[k]):
+            params_modelo[k] = 0.0
+    for k in ("n_motor_min", "n_motor_max", "n_pump_min", "n_pump_max"):
+        if not isinstance(params_modelo[k], (int, np.integer)):
+            params_modelo[k] = as_int(params_modelo[k])
+
+    return params_modelo
+
+def load_pumps_db(xlsx_path: str = DATASET_PATH) -> dict[str, dict]:
+    """Lee el Excel fijo y devuelve {TAG: params_modelo_normalizados}."""
+    # dtype=object para no perder cadenas con coma decimal
+    df = pd.read_excel(xlsx_path, sheet_name="dataset", dtype=object)
+
+    # Normaliza nombres de columnas esperadas (por si vienen con espacios raros)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    pumps = {}
+    for _, row in df.iterrows():
+        tag = str(row.get("TAG", "")).strip()
+        if not tag:
+            continue
+        pumps[tag] = build_row_params(row)
+
+    return pumps
+
+# Construimos el diccionario AL ARRANCAR
+PUMPS_DB = load_pumps_db()
+
+# =========================
+# Ejemplo de uso en la app:
+#   tags = sorted(PUMPS_DB.keys())
+#   tag = st.selectbox("TAG", tags)
+#   params = PUMPS_DB[tag]
+#   # Luego usar params["H0_m"], params["K"], params["r"], params["eta"], etc.
+# =========================
+
+
 
 # Plotly (si fallara la import, mostramos un mensaje y seguimos con cálculo)
 try:
