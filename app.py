@@ -91,50 +91,67 @@ def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
 
 
 # =============================================================================
-# Mapeo de columnas del dataset
+# Mapeo de columnas del dataset (acepta variantes en mayúsculas/minúsculas)
 # =============================================================================
-# === MAPEOS DESDE dataset.csv (sep=';' decimal=',') ===
+# Para cada clave, proveemos una lista de nombres de columnas candidatos.
 ATTR = {
     # Identificación / rating
-    "TAG":                 {"col": "TAG",                   "unit": "",      "type": "str"},
-    "pump_model":          {"col": "pumpmodel",             "unit": "",      "type": "str"},
-    "impeller_d_mm":       {"col": "impeller_d_mm",         "unit": "mm",    "type": "num"},
-    "motorpower_kw":       {"col": "motorpower_kw",         "unit": "kW",    "type": "num"},
-    "t_nom_nm":            {"col": "t_nom_nm",              "unit": "N·m",   "type": "num"},
-    "r":                   {"col": "r_trans",               "unit": "",      "type": "num"},
-    "n_m_min":             {"col": "motor_n_min_rpm",       "unit": "rpm",   "type": "num"},
-    "n_m_max":             {"col": "motor_n_max_rpm",       "unit": "rpm",   "type": "num"},
-    "n_p_min":             {"col": "pump_n_min_rpm",        "unit": "rpm",   "type": "num"},
-    "n_p_max":             {"col": "pump_n_max_rpm",        "unit": "rpm",   "type": "num"},
+    "TAG":                 {"cols": ["TAG"],                        "unit": "",      "type": "str"},
+    "pump_model":          {"cols": ["pumpmodel", "pump_model"],    "unit": "",      "type": "str"},
+    "impeller_d_mm":       {"cols": ["impeller_d_mm"],              "unit": "mm",    "type": "num"},
+    "motorpower_kw":       {"cols": ["motorpower_kw"],              "unit": "kW",    "type": "num"},
+    "t_nom_nm":            {"cols": ["t_nom_nm"],                   "unit": "N·m",   "type": "num"},
+    "r":                   {"cols": ["r_trans", "r_nm_np"],         "unit": "",      "type": "num"},
+    "n_m_min":             {"cols": ["motor_n_min_rpm"],            "unit": "rpm",   "type": "num"},
+    "n_m_max":             {"cols": ["motor_n_max_rpm"],            "unit": "rpm",   "type": "num"},
+    "n_p_min":             {"cols": ["pump_n_min_rpm"],             "unit": "rpm",   "type": "num"},
+    "n_p_max":             {"cols": ["pump_n_max_rpm"],             "unit": "rpm",   "type": "num"},
 
     # Inercias (catálogo TB Woods / Metso)
-    "J_m":                 {"col": "motor_j_kgm2",          "unit": "kg·m²", "type": "num"},
-    "J_driver":            {"col": "driverpulley_j_kgm2",   "unit": "kg·m²", "type": "num"},
-    "J_sleeve_driver":     {"col": "driverbushing_j_kgm2",  "unit": "kg·m²", "type": "num"},
-    "J_driven":            {"col": "drivenpulley_j_kgm2",   "unit": "kg·m²", "type": "num"},   # ojo: 'K' mayúscula
-    "J_sleeve_driven":     {"col": "drivenbushing_j_kgm2",  "unit": "kg·m²", "type": "num"},   # ojo: 'K' mayúscula
-    "J_imp":               {"col": "impeller_j_kgm2",       "unit": "kg·m²", "type": "num"},
+    "J_m":                 {"cols": ["motor_j_kgm2"],               "unit": "kg·m²", "type": "num"},
+    "J_driver":            {"cols": ["driverpulley_j_kgm2"],        "unit": "kg·m²", "type": "num"},
+    "J_sleeve_driver":     {"cols": ["driverbushing_j_kgm2"],       "unit": "kg·m²", "type": "num"},
+    "J_driven":            {"cols": ["drivenpulley_j_kgm2",  # nuevo
+                                     "drivenpulley_j_Kgm2"],        "unit": "kg·m²", "type": "num"},
+    "J_sleeve_driven":     {"cols": ["drivenbushing_j_kgm2", # nuevo
+                                     "drivenbushing_j_Kgm2"],       "unit": "kg·m²", "type": "num"},
+    "J_imp":               {"cols": ["impeller_j_kgm2"],            "unit": "kg·m²", "type": "num"},
 
     # Hidráulica / pulpa
-    "H0_m":                {"col": "H0_m",                  "unit": "m",     "type": "num"},
-    "K_H_per_Q":           {"col": "K_m_s2",             "unit": "—",     "type": "num"},   # H = H0 + K*(Q/3600)^2
-    "Qmin_m3h":            {"col": "Qmin_m3h",              "unit": "m³/h",  "type": "num"},
-    "Qbest_m3h":           {"col": "Qbest_m3h",             "unit": "m³/h",  "type": "num"},
-    "Qmax_m3h":            {"col": "Qmax_m3h",              "unit": "m³/h",  "type": "num"},
-    "eta":                 {"col": "eta",                   "unit": "",      "type": "num"},
-    "SlurryDensity":       {"col": "SlurryDensity_kgm3",    "unit": "kg/m³", "type": "num"},
+    "H0_m":                {"cols": ["H0_m", "h0_m"],               "unit": "m",     "type": "num"},
+    "K_H_per_Q":           {"cols": ["k_h_per_q", "K_H_per_Q"],     "unit": "—",     "type": "num"},  # H=H0+K*(Q/3600)^2
+    "Qmin_m3h":            {"cols": ["Qmin_m3h", "qmin_m3h"],       "unit": "m³/h",  "type": "num"},
+    "Qbest_m3h":           {"cols": ["Qbest_m3h", "qbest_m3h"],     "unit": "m³/h",  "type": "num"},
+    "Qmax_m3h":            {"cols": ["Qmax_m3h", "qmax_m3h"],       "unit": "m³/h",  "type": "num"},
+    "eta":                 {"cols": ["eta", "efficiency"],          "unit": "",      "type": "num"},
+    "SlurryDensity":       {"cols": ["slurrydensity_kgm3", "SlurryDensity_Kgm3"],
+                                                                  "unit": "kg/m³", "type": "num"},
 }
+
+
+def _get_from_row(row: pd.Series, candidates: list[str], default=np.nan):
+    """Busca el primer nombre de columna presente (case-insensitive)."""
+    idx = list(row.index)
+    lower_idx = {c.lower(): c for c in idx}
+    for name in candidates:
+        if name in row:
+            return row[name]
+        lname = name.lower()
+        if lname in lower_idx:
+            return row[lower_idx[lname]]
+    return default
 
 
 def get_attr(row: pd.Series, key: str, default=np.nan):
     """Obtiene valor de una clave del mapeo ATTR para una fila del df."""
     meta = ATTR[key]
-    col = meta["col"]
-    v = row.get(col, default)
+    v = _get_from_row(row, meta["cols"], default)
     if meta["type"] == "num":
         return get_num(v)
     # string
-    return str(v) if (v is not None and not (isinstance(v, float) and np.isnan(v))) else "—"
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "—"
+    return str(v)
 
 
 # =============================================================================
@@ -149,7 +166,7 @@ except Exception as e:
     st.stop()
 
 # Encabezado con logos + título
-colL, colC, colR = st.columns([1, 3, 1], vertical_alignment="center")
+colL, colC, colR = st.columns([1, 3, 1])
 with colL:
     p = images_path("metso_logo.png")
     if p.exists():
@@ -198,7 +215,7 @@ H0_m     = get_attr(row, "H0_m")
 K_coef   = get_attr(row, "K_H_per_Q")
 eta_ds   = get_attr(row, "eta")
 Q_min_ds = get_attr(row, "Qmin_m3h")
-Q_best   = get_attr(row, "Qbest_m3h")   # ya no se muestra, pero lo conservamos por si sirve luego
+Q_best   = get_attr(row, "Qbest_m3h")   # no se muestra; lo conservamos por si se usa en el futuro
 Q_max_ds = get_attr(row, "Qmax_m3h")
 rho      = get_attr(row, "SlurryDensity")
 if np.isnan(rho) or rho <= 0:
@@ -293,10 +310,11 @@ st.markdown("---")
 st.markdown("## 3) Tiempo inercial (par disponible vs rampa VDF)")
 
 # Slider rampa en el motor
-rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=600, value=100, step=5)
+rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=400, value=100, step=5)
 
 # Aceleración por par disponible (en rpm/s) y tiempos
 if not (np.isnan(J_eq) or np.isnan(T_nom_nm) or J_eq <= 0):
+    # \dot{ω}_m = T_disp / J_eq  → \dot{n}_m = (60/2π) * (T_disp/J_eq)
     n_dot_torque = (60.0 / (2.0 * math.pi)) * (T_nom_nm / J_eq)  # rpm/s
     t_par = (n_m_max - n_m_min) / max(n_dot_torque, 1e-9)        # s
 else:
@@ -321,6 +339,19 @@ else:
     pill(lim3_txt + f"**por rampa VDF** = {fmt_num(t_rampa, 's')}")
     limit3_name, limit3_val = "rampa VDF", t_rampa
 
+with st.expander("Detalles y fórmulas — Sección 3", expanded=False):
+    st.markdown(
+        "- **Hipótesis:** par del motor constante e igual al nominal \(T_{disp}=T_{nom}\) en 25–50 Hz; "
+        "las pérdidas mecánicas son despreciables.\n"
+        "- **Dinámica rotacional (eje motor):**\n"
+        "  \\[ J_{eq}\\,\\dot\\omega_m = T_{disp} \\;\\Rightarrow\\; \\dot\\omega_m = \\tfrac{T_{disp}}{J_{eq}}. \\]\n"
+        "- **Conversión a rpm:**  \(n_m=\\tfrac{60}{2\\pi}\\,\\omega_m\\)  ⇒\n"
+        "  \\[ \\dot n_m = \\tfrac{60}{2\\pi}\\,\\tfrac{T_{disp}}{J_{eq}}. \\]\n"
+        "- **Tiempo por par:**  \(t_{par}=\\dfrac{\\Delta n_m}{\\dot n_m}\\).\n"
+        "- **Tiempo por rampa VDF:**  \(t_{rampa}=\\dfrac{\\Delta n_m}{\\text{rampa}}\).\n"
+        "- **Criterio:** se toma como **limitante** el mayor entre \(t_{par}\) y \(t_{rampa}\)."
+    )
+
 st.markdown("---")
 
 
@@ -334,25 +365,26 @@ c4a, c4b, c4c = st.columns(3)
 with c4a:
     st.markdown(f"- H₀: {val_blue(H0_m, 'm')}", unsafe_allow_html=True)
 with c4b:
-    st.markdown(f"- K: {val_blue(K_coef, '', 3)}", unsafe_allow_html=True)
+    st.markdown(f"- Coeficiente K: {val_blue(K_coef, '', 3)}", unsafe_allow_html=True)
 with c4c:
     st.markdown(f"- ρ: {val_blue(rho, 'kg/m³', 0)}", unsafe_allow_html=True)
 
-# Rango de caudales para el análisis
-if np.isnan(Q_min_ds) or np.isnan(Q_max_ds) or Q_min_ds >= Q_max_ds:
-    if not np.isnan(Q_best) and Q_best > 0:
-        qmin_default = 0.6 * Q_best
-        qmax_default = 1.1 * Q_best
-    else:
-        qmin_default = 100.0
-        qmax_default = 300.0
-else:
-    qmin_default, qmax_default = Q_min_ds, Q_max_ds
+# ----- Rango de caudales para el análisis (limitado a ±30%) -----
+def _fallback_qmin_qmax():
+    if not np.isnan(Q_min_ds) and not np.isnan(Q_max_ds) and Q_min_ds < Q_max_ds:
+        return float(Q_min_ds), float(Q_max_ds)
+    # fallback si faltan datos
+    return 100.0, 300.0
+
+qmin_base, qmax_base = _fallback_qmin_qmax()
+qmin_allowed = 0.70 * qmin_base
+qmax_allowed = 1.30 * qmax_base
 
 Q_min, Q_max = st.slider(
-    "Rango de caudal considerado [m³/h]",
-    min_value=0.0, max_value=max(5000.0, float(qmax_default) * 1.2),
-    value=(float(qmin_default), float(qmax_default)),
+    "Rango de caudal considerado [m³/h]  (límite: −30% desde Q_min y +30% desde Q_max)",
+    min_value=float(qmin_allowed),
+    max_value=float(qmax_allowed),
+    value=(float(qmin_base), float(qmax_base)),
     step=1.0,
 )
 
@@ -428,12 +460,22 @@ with c4_2:
     which = "hidráulica" if (not np.isnan(t_hyd) and t_hyd > t_rampa) else "rampa VDF"
     pill(f"Tiempo limitante (sección 4): **{which} = {fmt_num(t_lim_4, 's')}**")
 
-# Para exportación (Sección 5) – determinar tiempo limitante global
-def _safe(v):  # para manejar NaN en el 'max'
-    return -np.inf if np.isnan(v) else v
-
-candidates = [("par", t_par), ("rampa VDF", t_rampa), ("hidráulica", t_hyd)]
-limit_global_name, limit_global_val = max(candidates, key=lambda kv: _safe(kv[1]))
+with st.expander("Detalles y fórmulas — Sección 4", expanded=False):
+    st.markdown(
+        "- **Curva del sistema** (aprox. cuadrática en caudal):\n"
+        "  \\[ H(Q)=H_0+K\\,(Q/3600)^2. \\]\n"
+        "- **Afinidad** (25–50 Hz): \(Q\\propto n_p\\). Se interpola linealmente entre \(n_{p,\\min}\) y \(n_{p,\\max}\) para mapear \(n_p\\to Q\\).\n"
+        "- **Eficiencia**: se usa una eficiencia global constante del dataset (acotada en \\([0{,}40,\\,0{,}88]\\)).\n"
+        "- **Potencia hidráulica** (eje bomba):\n"
+        "  \\[ P_h = \\frac{\\rho g\\,Q_s\\,H(Q)}{\\eta(Q)},\\qquad Q_s=Q/3600. \\]\n"
+        "- **Par de bomba y reflejo al motor**:\n"
+        "  \\[ T_{pump} = \\frac{P_h}{\\omega_p},\\qquad \\omega_p=\\frac{2\\pi n_p}{60},\\qquad T_{load,m}=\\frac{T_{pump}}{r}. \\]\n"
+        "- **Integración temporal** en el eje del motor (par neto variable):\n"
+        "  \\[ J_{eq}\\,\\dot\\omega_m = T_{disp}-T_{load,m}(n) \\;\\Rightarrow\\; "
+        "     \\Delta t = \\frac{J_{eq}\\,\\Delta\\omega_m}{T_{disp}-T_{load,m}}. \\]\n"
+        "  Se integra numéricamente entre \(n_{m,\\min}\\) y \(n_{m,\\max}\\).\n"
+        "- **Criterio**: se reporta el tiempo por hidráulica y se compara con el tiempo por rampa; el mayor es el **limitante**."
+    )
 
 st.markdown("---")
 
@@ -446,6 +488,13 @@ st.markdown("## 5) Exportar resultados (CSV)")
 # Valores finales usados (incluye fallback del 10% en manguitos)
 J_sleeve_driver_used = J_sleeve_driver
 J_sleeve_driven_used = J_sleeve_driven
+
+# Para exportación – determinar tiempo limitante global
+def _safe(v):  # para manejar NaN en el 'max'
+    return -np.inf if np.isnan(v) else v
+
+candidates = [("par", t_par), ("rampa VDF", t_rampa), ("hidráulica", t_hyd)]
+limit_global_name, limit_global_val = max(candidates, key=lambda kv: _safe(kv[1]))
 
 summary = {
     # Identificación
@@ -490,7 +539,6 @@ summary = {
 }
 
 df_out = pd.DataFrame([summary])
-
 csv_bytes = df_out.to_csv(sep=";", index=False, decimal=",").encode("utf-8")
 st.download_button(
     "⬇️ Descargar CSV (resumen del TAG)",
