@@ -154,6 +154,7 @@ with c_r:
         st.latex(r"J_{\text{cilindro macizo}}=\tfrac12\,mR^2 \quad\text{(aprox. poleas/manguitos)}")
         st.latex(r"J_{\text{anillo}}=mR^2 \quad\text{(aro delgado)}")
         st.markdown(
+            "- **Motor (J_m):** valores tomados de **hoja de datos WEG**.\n"
             "- **Poleas (J_driver, J_driven):** valores tomados de **catálogo TB Woods**.\n"
             "- **Manguitos (J_driver_b, J_driven_b):** **aproximados como el 10%** de la inercia de su polea correspondiente.\n"
             "- **Impulsor (J_imp):** valores tomados de **manuales Metso**.",
