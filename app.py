@@ -74,7 +74,8 @@ def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
 def pill_error(text: str):
     pill(text, bg="#fdecea", color="#b00020")
 
-def info_box(title: str, body_md: str):
+def text_card(title: str, body_md: str):
+    """Tarjeta gris para texto (sin fórmulas). Las fórmulas se renderizan luego con st.latex."""
     st.markdown(
         f"""
         <div style="background:#f8f9fa; border:1px solid #e9ecef; border-radius:10px;
@@ -247,8 +248,8 @@ def flow_slider_bounds(row: pd.Series):
     if np.isnan(qmin) or np.isnan(qmax) or qmin <= 0 or qmax <= 0:
         qmin, qmax = 100.0, 300.0
 
-    slider_min = max(0.0, 0.70 * qmin)
-    slider_max = 1.30 * qmax
+    slider_min = max(0.0, 0.70 * qmin)  # -30% de Qmin
+    slider_max = 1.30 * qmax           # +30% de Qmax
     default_low, default_high = float(qmin), float(qmax)
     return float(slider_min), float(slider_max), (default_low, default_high)
 
@@ -422,18 +423,18 @@ with colR:
             "- **Impulsor** (J_imp): manuales **Metso**.\n"
         )
 
-# Descripción adicional (texto)
-info_box(
+# Descripción — Sección 2 (texto + ecuaciones bien renderizadas)
+text_card(
     "Descripción — Sección 2",
     """
-    La **inercia equivalente** \\(J_{eq}\\) es la inercia "vista" por el eje del motor. Se compone de:
-    (1) inercias que ya están en el eje del motor (motor, polea motriz y su *bushing*), y
-    (2) inercias del lado de la bomba (polea conducida, *bushing* conducido e impulsor) **reflejadas** al eje del motor dividiendo por \\(r^2\\).
-    <br><br>
-    **Qué la aumenta:** impulsores más grandes/pesados, poleas de mayor inercia, *bushings* más macizos y **relaciones r pequeñas** (porque reducen menos la inercia reflejada).
-    **Qué la reduce:** impulsores livianos, selección de poleas con menor inercia y **relaciones r altas**.
+    La **inercia equivalente** es la inercia "vista" por el eje del motor. Se suman las inercias del lado del
+    motor y las del lado de la bomba **reflejadas** al motor dividiendo por \\(r^2\\).
+    Factores que la aumentan: impulsores grandes/pesados, poleas con mayor inercia, *bushings* voluminosos
+    y **relaciones r pequeñas**. La reducen: impulsores livianos, poleas de baja inercia y **relaciones r altas**.
     """
 )
+st.latex(r"J_{\mathrm{eq}} = J_m + J_{\mathrm{driver}} + J_{\mathrm{bushing,driver}} + \frac{J_{\mathrm{driven}} + J_{\mathrm{bushing,driven}} + J_{\mathrm{imp}}}{r^2}")
+st.latex(r"\omega_p = \omega_m / r")
 
 st.markdown("---")
 
@@ -443,7 +444,7 @@ st.markdown("---")
 
 st.markdown("## 3) Tiempo inercial (par disponible vs rampa VDF)")
 
-rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=600, value=100, step=5)
+rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=600, value=100, step=5, key=f"rampa_{tag_sel}")
 
 if not (np.isnan(J_eq) or np.isnan(T_nom_nm) or J_eq <= 0):
     n_dot_torque = (60.0 / (2.0 * math.pi)) * (T_nom_nm / J_eq)  # rpm/s
@@ -476,19 +477,17 @@ with st.expander("Detalles y fórmulas — Sección 3", expanded=False):
     st.latex(r"t_{\mathrm{par}} = \dfrac{\Delta n_m}{\dot n_m}, \qquad t_{\mathrm{rampa}} = \dfrac{\Delta n_m}{\text{rampa}}")
     st.latex(r"\text{Criterio: } t = \max\{t_{\mathrm{par}},\,t_{\mathrm{rampa}}\}")
 
-# Descripción adicional (texto)
-info_box(
+# Descripción — Sección 3
+text_card(
     "Descripción — Sección 3",
     """
-    La **aceleración por par** es cuán rápido sube la velocidad del motor solo por el par disponible:
-    \\(\\dot n_m = \\tfrac{60}{2\\pi}\\,\\tfrac{T_{disp}}{J_{eq}}\\).
-    <br><br>
-    El **tiempo por par** mide cuánto demora el motor en ir de la velocidad mínima a la máxima **si** la limitación fuera solo el par.
-    El **tiempo por rampa** es el tiempo que impone el propio VDF al fijar una pendiente de velocidad.
-    <br><br>
-    El **tiempo efectivo** es el **mayor** entre ambos: si el VDF acelera muy lento, manda la rampa; si acelera muy rápido, manda la inercia (par).
+    La **aceleración por par** expresa la rapidez de incremento de velocidad debida al par disponible.
+    El **tiempo por par** es el que tomaría la aceleración solo limitada por el par; el **tiempo por rampa**
+    es el impuesto por el VDF. El tiempo efectivo es el **mayor** de ambos.
     """
 )
+st.latex(r"\dot n_m = \tfrac{60}{2\pi}\,\tfrac{T_{\mathrm{disp}}}{J_{\mathrm{eq}}}")
+st.latex(r"t_{\mathrm{par}} = {\Delta n_m}/{\dot n_m},\qquad t_{\mathrm{rampa}} = {\Delta n_m}/{\text{rampa}}")
 
 st.markdown("---")
 
@@ -523,23 +522,6 @@ with c4d:
     st.markdown(f"- η (clip): {val_blue(eta_min*100, '%', 0)} – {val_blue(eta_max*100, '%', 0)}", unsafe_allow_html=True)
 
 # Slider de caudal adaptado a cada TAG
-def flow_slider_bounds(row: pd.Series):
-    qmin = get_val(row, "Q_min_m3h", np.nan)
-    qmax = get_val(row, "Q_max_m3h", np.nan)
-    qref = get_val(row, "Q_ref_m3h", np.nan)
-
-    if np.isnan(qmin) and not np.isnan(qref):
-        qmin = 0.7 * qref
-    if np.isnan(qmax) and not np.isnan(qref):
-        qmax = 1.3 * qref
-    if np.isnan(qmin) or np.isnan(qmax) or qmin <= 0 or qmax <= 0:
-        qmin, qmax = 100.0, 300.0
-
-    slider_min = max(0.0, 0.70 * qmin)  # -30% de Qmin
-    slider_max = 1.30 * qmax           # +30% de Qmax
-    default_low, default_high = float(qmin), float(qmax)
-    return float(slider_min), float(slider_max), (default_low, default_high)
-
 slider_min, slider_max, default_range = flow_slider_bounds(row)
 Q_min, Q_max = st.slider(
     "Rango de caudal considerado [m³/h]",
@@ -556,31 +538,6 @@ n_m_grid = np.linspace(n_m_min, n_m_max, N)
 n_p_grid = np.linspace(n_p_min, n_p_max, N)
 
 # Par resistente reflejado + potencia + eficiencia + Q(n_p)
-def hydraulic_torque_on_motor(row: pd.Series,
-                              n_p_rpm: np.ndarray,
-                              Q_low_high: tuple[float, float],
-                              rho_kgm3: float | None = None):
-    g = 9.81
-    rho_data = get_val(row, "SlurryDensity", np.nan)
-    rho = rho_kgm3 if (rho_kgm3 and rho_kgm3 > 0) else (rho_data if not np.isnan(rho_data) else get_val(row, "rho_kgm3", 1000.0))
-    r = get_val(row, "r", 1.0)
-    _, _, n_p_min, n_p_max, _ = rpm_bounds(row)
-
-    q_low, q_high = Q_low_high
-    if n_p_max <= n_p_min + 1e-9:
-        Q = np.full_like(n_p_rpm, q_low)
-    else:
-        Q = np.interp(n_p_rpm, [n_p_min, n_p_max], [q_low, q_high])
-
-    H = system_head_H(row, Q)
-    eta = eta_from_Q(row, Q)
-    Qs = Q / 3600.0
-    P_h = rho * g * Qs * H / np.maximum(eta, 1e-6)  # W
-    omega_p = 2.0 * np.pi * np.asarray(n_p_rpm, dtype=float) / 60.0
-    T_pump = np.where(omega_p > 1e-9, P_h / omega_p, 0.0)
-    T_load_m = T_pump / max(r, 1e-9)
-    return T_load_m, P_h, eta, Q
-
 T_load_m, P_h_W, eta_grid, Q_grid = hydraulic_torque_on_motor(row, n_p_grid, (Q_min, Q_max), rho_kgm3=rho_use)
 T_disp_m = np.full_like(T_load_m, T_nom_nm)
 
@@ -685,24 +642,18 @@ with st.expander("Detalles y fórmulas — Sección 4", expanded=False):
     st.latex(r"T_{\mathrm{net}}=T_{\mathrm{disp}}-T_{\mathrm{load,m}},\quad \Delta t = J_{\mathrm{eq}}\Delta\omega_m/T_{\mathrm{net}}")
     st.latex(r"\text{Tiempo total } t = \int_{n_{m,\min}}^{n_{m,\max}} \frac{J_{\mathrm{eq}}(2\pi/60)}{T_{\mathrm{net}}(n_m)}\, dn_m")
 
-# Descripción adicional (texto)
-info_box(
+# Descripción — Sección 4
+text_card(
     "Descripción — Sección 4",
     """
-    Partimos de la **curva del sistema** \\(H(Q)=H_0+K(Q/3600)^2\\): \\(H_0\\) representa altura estática y
-    \\(K\\) las pérdidas por fricción. Entre 25–50 Hz, por **afinidad**, el caudal es proporcional a la
-    velocidad de la bomba, por lo que usamos el *slider* para fijar \\(Q\\) en los extremos y lo
-    **interpolamos** con la velocidad.
-    <br><br>
-    Con \\(H(Q)\\) y una **eficiencia** \\(\\eta(Q)\\) (polinomio si hay coeficientes o valor constante),
-    calculamos la **potencia hidráulica** \\(P_h=\\rho g Q_s H/\\eta\\), el **par de la bomba**
-    \\(T_{pump}=P_h/\\omega_p\\) y lo **reflejamos** al eje del motor: \\(T_{load,m}=T_{pump}/r\\).
-    <br><br>
-    El **par neto** es \\(T_{net}=T_{disp}-T_{load,m}\\). Cuando \\(T_{net}\\le 0\\), **no hay aceleración**.
-    Si \\(T_{net}>0\\), integramos la curva \\(\\mathrm{d}t/\\mathrm{d}n_m = J_{eq}(2\\pi/60)/T_{net}(n_m)\\)
-    entre la velocidad mínima y máxima: el **área bajo esa curva** es el **tiempo de reacción con carga hidráulica**.
+    Con \\(H(Q)=H_0+K(Q/3600)^2\\) y la **afinidad** \\(Q\\propto n_p\\), fijamos \\(Q\\) en los extremos con el *slider*
+    y lo **interpolamos** a lo largo de la rampa. Con la eficiencia \\(\\eta(Q)\\) (polinomio si hay coeficientes o valor
+    constante), calculamos \\(P_h\\), el par de bomba y el par reflejado al motor. El **par neto** define la aceleración
+    disponible y la curva \\(dt/dn_m\\); el **área bajo esa curva** entre \\(n_{m,\min}\\) y \\(n_{m,\max}\\) es el tiempo de reacción.
     """
 )
+st.latex(r"P_h=\rho g Q_s H/\eta,\quad T_{\mathrm{pump}}=P_h/\omega_p,\quad T_{\mathrm{load,m}}=T_{\mathrm{pump}}/r")
+st.latex(r"\frac{dt}{dn_m}=\frac{J_{\mathrm{eq}}(2\pi/60)}{T_{\mathrm{net}}(n_m)}")
 
 st.markdown("---")
 
