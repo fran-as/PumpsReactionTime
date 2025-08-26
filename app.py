@@ -1,11 +1,6 @@
 # app.py
 # ─────────────────────────────────────────────────────────────────────────────
 # Dashboard: Tiempo de reacción de bombas con VDF
-# Secciones:
-#   1) Parámetros (datos dados por TAG)
-#   2) Cálculo de inercia equivalente (con detalle de formulación)
-#   3) Tiempos "por par" vs "por rampa" + recuadro verde con tiempo limitante
-#   4) Integración con carga hidráulica (curva del sistema, potencia eje y tiempo)
 # ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -25,33 +20,26 @@ st.set_page_config(
     layout="wide",
 )
 
-# Paleta para valores
-BLUE = "#1f77b4"   # Dado (dataset)  → azul
-GREEN = "#2ca02c"  # Calculado       → verde
+# Colores
+BLUE = "#1f77b4"   # Dado (dataset) → azul
+GREEN = "#2ca02c"  # Calculado      → verde
 GRAY = "#6c757d"
 
 # Utilidades ------------------------------------------------------------------
 
 def dataset_path() -> Path:
-    """Ruta del dataset.csv (siempre en el repo junto a app.py)."""
     return Path(__file__).with_name("dataset.csv")
 
 def images_path(name: str) -> Path:
-    """Ruta a /images/<name> relativa al repo."""
     return Path(__file__).with_name("images") / name
 
 def get_num(x) -> float:
-    """Convierte a float números que pueden venir con separador decimal ',' y separadores de miles.
-    Retorna NaN si no puede parsear.
-    """
     if x is None:
         return float("nan")
     if isinstance(x, (int, float, np.number)):
         return float(x)
     s = str(x).strip().replace(" ", "").replace("\u00a0", "")
-    # normalizar decimal coma → punto
     s = s.replace(",", ".")
-    # quitar cualquier char no numérico típico
     import re
     s = re.sub(r"[^0-9eE\+\-\.]", "", s)
     try:
@@ -60,7 +48,9 @@ def get_num(x) -> float:
         return float("nan")
 
 def fmt_num(x, unit: str = "", ndigits: int = 2) -> str:
-    """Formatea número con coma decimal (estilo ES)."""
+    """Formatea números con coma decimal; si es texto, lo devuelve tal cual."""
+    if isinstance(x, str):
+        return f"{x} {unit}".strip()
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return "—"
     s = f"{x:,.{ndigits}f}"
@@ -77,13 +67,7 @@ def val_blue(x, unit="", ndigits=2) -> str:
 def val_green(x, unit="", ndigits=2) -> str:
     return color_value(fmt_num(x, unit, ndigits), GREEN)
 
-def latex_center(s: str):
-    st.markdown(
-        f"<div style='text-align:center; margin: 0.5rem 0'>{s}</div>",
-        unsafe_allow_html=True,
-    )
-
-# Mapeo de columnas (alias tolerantes) ---------------------------------------
+# Mapeo de columnas -----------------------------------------------------------
 
 ALIASES = {
     "tag": ["tag", "TAG", "Tag"],
@@ -91,13 +75,13 @@ ALIASES = {
     "motor_power_kw": ["motorpower_kw", "motor_power_kw", "P_motor_kW"],
     "t_nom_nm": ["t_nom_nm", "torque_nom_nm", "T_nom_nm"],
     "r_nm_np": ["r_trans", "ratio_nm_np", "r", "r_nm_np"],
-    # Inercias (catálogo TB Woods / manuales)
+    # Inercias
     "J_m": ["motor_j_kgm2", "J_motor_kgm2", "Jm_kgm2"],
     "J_driver": ["driver_j_kgm2", "J_driver_kgm2", "J_polea_motriz_kgm2"],
     "J_driven": ["driven_j_kgm2", "J_driven_kgm2", "J_polea_conducida_kgm2"],
     "J_imp": ["impeller_j_kgm2", "J_imp_kgm2", "J_rotor_bomba_kgm2"],
     "impeller_d_mm": ["impeller_d_mm", "D_imp_mm", "diametro_impulsor_mm"],
-    # Velocidades de referencia (25–50 Hz por afinidad)
+    # Velocidades/caudales de referencia
     "n_ref_rpm": ["n_ref_rpm", "n_p_ref_rpm", "n_bomba_ref_rpm"],
     "Q_ref_m3h": ["Q_ref_m3h", "Qref_m3h"],
     "Q_min_m3h": ["Q_min_m3h"],
@@ -105,11 +89,11 @@ ALIASES = {
     # Curva de sistema
     "H0_m": ["H0_m", "H_0_m"],
     "K_m_s2": ["K_m_s2", "K_m_per_(m3h)^2", "K_m"],
-    # Eficiencia (polinomio cuadrático en beta = Q/Q_ref)
+    # Eficiencia
     "eta_a": ["eta_a"],
     "eta_b": ["eta_b"],
     "eta_c": ["eta_c"],
-    "eta_beta": ["eta_beta"],  # si viene, usarla directamente
+    "eta_beta": ["eta_beta"],
     "eta_min_clip": ["eta_min_clip"],
     "eta_max_clip": ["eta_max_clip"],
     # Densidad de pulpa
@@ -117,19 +101,16 @@ ALIASES = {
 }
 
 def col_lookup(df: pd.DataFrame, key: str) -> str | None:
-    """Devuelve el nombre de columna real para una clave canónica."""
     if key not in ALIASES:
         return None
-    candidates = [c.lower() for c in df.columns]
+    lower = [c.lower() for c in df.columns]
     for alias in ALIASES[key]:
-        if alias.lower() in candidates:
-            return df.columns[candidates.index(alias.lower())]
+        if alias.lower() in lower:
+            return df.columns[lower.index(alias.lower())]
     return None
 
 def load_data() -> pd.DataFrame:
-    path = dataset_path()
-    df = pd.read_csv(path, sep=";", decimal=",", dtype=str)
-    # normalizar espacios en encabezados
+    df = pd.read_csv(dataset_path(), sep=";", decimal=",", dtype=str)
     df.columns = [c.strip() for c in df.columns]
     return df
 
@@ -139,35 +120,32 @@ def load_data() -> pd.DataFrame:
 
 colL, colC, colR = st.columns([1, 3, 1])
 with colL:
-    logo_metso = images_path("metso_logo.png")
-    if logo_metso.exists():
-        st.image(str(logo_metso), use_container_width=True)
+    p = images_path("metso_logo.png")
+    if p.exists():
+        st.image(str(p), use_container_width=True)
 with colC:
     st.markdown(
         "<h1 style='text-align:center; margin-top: 0.2rem'>Tiempo de reacción de bombas con VDF</h1>",
         unsafe_allow_html=True,
     )
 with colR:
-    logo_ausenco = images_path("ausenco_logo.png")
-    if logo_ausenco.exists():
-        st.image(str(logo_ausenco), use_container_width=True)
+    p = images_path("ausenco_logo.png")
+    if p.exists():
+        st.image(str(p), use_container_width=True)
 
 st.markdown("---")
 
 # =============================================================================
-# Carga del dataset + selector de TAG
+# Dataset + selector de TAG
 # =============================================================================
 
 df_raw = load_data()
-
 tag_col = col_lookup(df_raw, "tag") or "TAG"
 tags = df_raw[tag_col].astype(str).tolist()
 tag_sel = st.sidebar.selectbox("Selecciona TAG", tags, index=0)
-
 row = df_raw[df_raw[tag_col].astype(str) == str(tag_sel)].iloc[0]
 
-# Extraer valores con alias
-def get_val(key: str, default=np.nan) -> float:
+def get_val(key: str, default=np.nan):
     col = col_lookup(df_raw, key)
     if col and col in row:
         return get_num(row[col])
@@ -184,10 +162,8 @@ J_driven   = get_val("J_driven")
 J_imp      = get_val("J_imp")
 D_imp_mm   = get_val("impeller_d_mm")
 
-# Rango de velocidades (25–50 Hz por afinidad usando n_ref si está disponible)
 n_ref_rpm  = get_val("n_ref_rpm")
 if np.isnan(n_ref_rpm):
-    # fallback prudente
     n_ref_rpm = 1000.0
 n_p_min = 0.5 * n_ref_rpm
 n_p_max = 1.0 * n_ref_rpm
@@ -198,24 +174,20 @@ else:
     n_m_min = 2 * n_p_min
     n_m_max = 2 * n_p_max
 
-# Curva de sistema / eficiencia / densidad
 H0_m     = get_val("H0_m")
-K_m_s2   = get_val("K_m_s2")              # para H(Q)=H0 + K*(Q/3600)^2
+K_m_s2   = get_val("K_m_s2")
 eta_a    = get_val("eta_a")
 eta_b    = get_val("eta_b")
 eta_c    = get_val("eta_c")
 eta_min  = get_val("eta_min_clip", 0.4)
 eta_max  = get_val("eta_max_clip", 0.88)
-eta_beta = get_val("eta_beta")            # si viene ya la eta en [0..1] a Q_ref
-
+eta_beta = get_val("eta_beta")
 Q_ref    = get_val("Q_ref_m3h")
 Q_min_ds = get_val("Q_min_m3h")
 Q_max_ds = get_val("Q_max_m3h")
-
-rho = get_val("rho_kgm3")
+rho      = get_val("rho_kgm3")
 if np.isnan(rho) or rho <= 0:
-    rho = 1000.0  # fallback agua
-
+    rho = 1000.0
 g = 9.81
 
 # =============================================================================
@@ -256,15 +228,15 @@ st.markdown("## 2) Cálculo de inercia equivalente")
 left, right = st.columns([1.1, 1.2])
 with left:
     st.markdown("**Inercias individuales**")
-    # Manguitos: 10% de inercia de la polea correspondiente (aprox.)
+    # Manguitos ≈ 10% de la polea correspondiente
     J_sleeve_driver = 0.10 * J_driver if not np.isnan(J_driver) else np.nan
     J_sleeve_driven = 0.10 * J_driven if not np.isnan(J_driven) else np.nan
 
     st.markdown(f"- Motor (J_m): {val_blue(J_m, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Polea motriz (J_driver): {val_blue(J_driver, 'kg·m²')}", unsafe_allow_html=True)
-    st.markdown(f\"- Manguito motriz (J_sleeve_driver≈10% J_driver): {val_green(J_sleeve_driver, 'kg·m²')}\", unsafe_allow_html=True)
+    st.markdown(f"- Manguito motriz (J_sleeve_driver≈10% J_driver): {val_green(J_sleeve_driver, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Polea conducida (J_driven): {val_blue(J_driven, 'kg·m²')}", unsafe_allow_html=True)
-    st.markdown(f\"- Manguito conducido (J_sleeve_driven≈10% J_driven): {val_green(J_sleeve_driven, 'kg·m²')}\", unsafe_allow_html=True)
+    st.markdown(f"- Manguito conducido (J_sleeve_driven≈10% J_driven): {val_green(J_sleeve_driven, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Impulsor/rotor de bomba (J_imp): {val_blue(J_imp, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Relación r (n_m/n_p): {val_blue(r_nm_np)}", unsafe_allow_html=True)
 
@@ -272,8 +244,8 @@ with right:
     st.markdown("**Fórmula utilizada**")
     st.latex(r"J_{\mathrm{eq}} \;=\; J_m \;+\; (J_{\mathrm{driver}} + J_{\mathrm{sleeve,drv}}) \;+\; \dfrac{J_{\mathrm{driven}} + J_{\mathrm{sleeve,drn}} + J_{\mathrm{imp}}}{r^2}")
     st.caption(
-        "Las inercias del lado bomba giran a menor velocidad (ω_p = ω_m/r). "
-        "Igualando energías cinéticas a una ω_m común, los términos del lado bomba se dividen por r²."
+        r"Las inercias del lado bomba giran a $\omega_p=\omega_m/r$. "
+        r"Igualando energías cinéticas a una $\omega_m$ común, los términos del lado bomba se dividen por $r^2$."
     )
 
 # Inercia equivalente
@@ -294,34 +266,31 @@ st.markdown(f"**Inercia equivalente (J_eq):** {val_green(J_eq, 'kg·m²')}", uns
 
 with st.expander("Formulación de las inercias por componente"):
     st.markdown(
-        "- **Poleas (J_driver, J_driven):** valores **obtenidos del catálogo TB Woods** para la serie y diámetro declarados.\n"
-        "- **Manguitos/bushings:** se **aproximan** como el **10% de la inercia** de la polea correspondiente.\n"
-        "- **Impulsor (J_imp):** tomado de **manuales Metso** para el modelo de bomba.\n"
-        "- **Motor (J_m):** inercia del rotor informada por el fabricante del motor.\n"
+        "- **Poleas (J_driver, J_driven):** valores **obtenidos del catálogo TB Woods**.\n"
+        "- **Manguitos/bushings:** **10% de la inercia** de la polea correspondiente (aprox.).\n"
+        "- **Impulsor (J_imp):** de **manuales Metso**.\n"
+        "- **Motor (J_m):** inercia del rotor del fabricante.\n"
     )
 
 st.markdown("---")
 
 # =============================================================================
-# 3) Tiempo inercial básico (por par vs por rampa)
+# 3) Tiempo inercial (par vs rampa)
 # =============================================================================
 
 st.markdown("## 3) Tiempo inercial (par disponible vs rampa VDF)")
 
-# Rampa VDF (rpm/s) en el lado motor
 rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=400, value=100, step=5)
 
-# Tiempo por par (sin hidráulica):  ṅ = (60/2π) * T / J_eq  → tiempo = Δn / ṅ
+n_dot_torque = float("nan")
 if not (np.isnan(J_eq) or np.isnan(T_nom_nm) or J_eq <= 0):
     n_dot_torque = (60.0 / (2.0 * math.pi)) * (T_nom_nm / J_eq)  # rpm/s
     t_par = (n_m_max - n_m_min) / max(n_dot_torque, 1e-9)        # s
 else:
     t_par = float("nan")
 
-# Tiempo por rampa (control):  Δn / rampa
 t_rampa = (n_m_max - n_m_min) / max(rampa_vdf, 1e-9)
 
-# Mostrar
 cA, cB, cC = st.columns(3)
 with cA:
     st.markdown(f"- Aceleración por par (lado motor): {val_green(n_dot_torque, 'rpm/s')}", unsafe_allow_html=True)
@@ -330,7 +299,6 @@ with cB:
 with cC:
     st.markdown(f"- Tiempo por rampa VDF: {val_blue(t_rampa, 's')}", unsafe_allow_html=True)
 
-# Recuadro: tiempo limitante (sección 3, solo comparando par vs rampa)
 def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
     st.markdown(
         f"""
@@ -354,8 +322,6 @@ st.markdown("---")
 # =============================================================================
 
 st.markdown("## 4) Integración con carga hidráulica")
-
-# Fórmula de la curva (modelo cuadrático por defecto con K_m_s2)
 st.latex(r"H(Q) \;=\; H_0 \;+\; K\,\left(\dfrac{Q}{3600}\right)^2 \qquad \big[\,Q:\ \mathrm{m^3/h},\ H:\ \mathrm{m}\,\big]")
 
 c4a, c4b, c4c, c4d = st.columns(4)
@@ -368,9 +334,8 @@ with c4c:
 with c4d:
     st.markdown(f"- η (clip): {val_blue(eta_min*100, '%', 0)} – {val_blue(eta_max*100, '%', 0)}", unsafe_allow_html=True)
 
-# Rango de caudal asociado a 25–50 Hz (si vienen Q_min/Q_max los usamos, sino proponemos)
+# Rango de caudales
 if np.isnan(Q_min_ds) or np.isnan(Q_max_ds) or Q_min_ds >= Q_max_ds:
-    # Proponer en torno a Q_ref
     if not np.isnan(Q_ref) and Q_ref > 0:
         qmin_default = 0.6 * Q_ref
         qmax_default = 1.1 * Q_ref
@@ -382,51 +347,45 @@ else:
 
 Q_min, Q_max = st.slider(
     "Rango de caudal considerado [m³/h]",
-    min_value=0.0, max_value=max(5000.0, qmax_default*1.2),
+    min_value=0.0, max_value=max(5000.0, qmax_default * 1.2),
     value=(float(qmin_default), float(qmax_default)),
     step=1.0,
 )
 
-# Afinidad: asociamos Q_min↔n_p_min y Q_max↔n_p_max (relación lineal)
 def Q_from_np(n_p: np.ndarray) -> np.ndarray:
     if n_p_max <= n_p_min + 1e-9:
         return np.full_like(n_p, Q_min)
     return Q_min + (Q_max - Q_min) * (n_p - n_p_min) / (n_p_max - n_p_min)
 
-# Eficiencia bomba vs Q
 def eta_from_Q(Q_m3h: np.ndarray) -> np.ndarray:
     if not np.isnan(eta_beta) and eta_beta > 0 and not np.isnan(eta_min) and not np.isnan(eta_max):
-        # Si η_beta viene ya como valor, lo usamos constante (rareza en algunos datasets)
-        e = np.full_like(Q_m3h, fill_value=float(eta_beta))
+        e = np.full_like(Q_m3h, float(eta_beta))
     elif not (np.isnan(eta_a) or np.isnan(eta_b) or np.isnan(eta_c) or np.isnan(Q_ref) or Q_ref <= 0):
         beta = Q_m3h / Q_ref
         e = eta_a + eta_b * beta + eta_c * (beta**2)
     else:
-        e = np.full_like(Q_m3h, 0.72)  # fallback
-    # clip
+        e = np.full_like(Q_m3h, 0.72)
     emin = eta_min if not np.isnan(eta_min) else 0.4
     emax = eta_max if not np.isnan(eta_max) else 0.88
     return np.clip(e, emin, emax)
 
-# Discretización sobre rpm motor (o bomba) para integrar tiempo real con carga
+# Mallas
 N = 600
 n_m_grid = np.linspace(n_m_min, n_m_max, N)
 n_p_grid = n_m_grid / max(r_nm_np, 1e-9)
-Q_grid   = Q_from_np(n_p_grid)             # m³/h
-q_grid   = Q_grid / 3600.0                 # m³/s
-H_grid   = H0_m + K_m_s2 * (q_grid**2)     # m
+Q_grid   = Q_from_np(n_p_grid)
+q_grid   = Q_grid / 3600.0
+H_grid   = H0_m + K_m_s2 * (q_grid**2)
 eta_grid = eta_from_Q(Q_grid)
 
-# Potencia hidráulica y torque de la bomba
+# Potencias y pares
 P_h_grid = rho * g * q_grid * H_grid / np.maximum(eta_grid, 1e-6)   # W
 omega_p  = 2.0 * math.pi * n_p_grid / 60.0                          # rad/s
 T_pump   = np.where(omega_p > 1e-9, P_h_grid / omega_p, 0.0)        # N·m (eje bomba)
-
-# Par resistente reflejado al motor (sin pérdidas en transmisión)
 T_load_m = T_pump / max(r_nm_np, 1e-9)                              # N·m (eje motor)
-T_disp_m = np.full_like(T_load_m, T_nom_nm)                         # par disponible motor (constante)
+T_disp_m = np.full_like(T_load_m, T_nom_nm)
 
-# Graficar par carga vs disponible
+# Gráficos
 fig_t = go.Figure()
 fig_t.add_trace(go.Scatter(x=n_p_grid, y=T_load_m, name="Par resistente reflejado (motor)", mode="lines"))
 fig_t.add_trace(go.Scatter(x=n_p_grid, y=T_disp_m, name="Par motor disponible", mode="lines"))
@@ -439,7 +398,6 @@ fig_t.update_layout(
 )
 st.plotly_chart(fig_t, use_container_width=True)
 
-# Gráfico de potencia hidráulica
 fig_p = go.Figure()
 fig_p.add_trace(go.Scatter(x=n_p_grid, y=P_h_grid/1000.0, mode="lines", name="P hidráulica [kW]"))
 fig_p.update_layout(
@@ -451,17 +409,13 @@ fig_p.update_layout(
 )
 st.plotly_chart(fig_p, use_container_width=True)
 
-# Integración del tiempo real con carga: dω/dt = (T_disp - T_load_m)/J_eq  (lado motor)
+# Integración temporal con carga
 if not (np.isnan(J_eq) or J_eq <= 0):
-    omega_m_grid = 2.0 * math.pi * n_m_grid / 60.0  # rad/s
+    omega_m_grid = 2.0 * math.pi * n_m_grid / 60.0
     d_omega = np.diff(omega_m_grid)
-
-    # T neto
     T_net = T_disp_m - T_load_m
-    # Si en algún punto T_net ≤ 0 → no acelera (división por 0). Lo tratamos como muy lento.
     T_net_clip = np.maximum(T_net, 1e-6)
-
-    dt = (J_eq * d_omega) / T_net_clip[:-1]  # s
+    dt = (J_eq * d_omega) / T_net_clip[:-1]
     t_hyd = float(np.sum(dt))
 else:
     t_hyd = float("nan")
@@ -470,22 +424,16 @@ c4_1, c4_2 = st.columns(2)
 with c4_1:
     st.markdown(f"- Tiempo por carga **hidráulica** (integración): {val_green(t_hyd, 's')}", unsafe_allow_html=True)
 with c4_2:
-    # Comparamos con la rampa de control
     t_lim_4 = max(t_hyd, t_rampa) if not np.isnan(t_hyd) else t_rampa
     which = "hidráulica" if (not np.isnan(t_hyd) and t_hyd > t_rampa) else "rampa VDF"
     pill(f"Tiempo limitante (sección 4): **{which} = {fmt_num(t_lim_4, 's')}**")
 
 with st.expander("Detalles de la formulación (sección 4)"):
     st.markdown(
-        "- **Curva del sistema:** $H(Q)=H_0 + K\\,(Q/3600)^2$, con $Q$ en m³/h y $H$ en m.\n"
-        "- **Afinidad:** $Q\\propto n_p$ en 25–50 Hz ⇒ mapeamos linealmente el caudal al rango de velocidades de la bomba.\n"
-        "- **Potencia hidráulica:** $P_h = \\dfrac{\\rho g\\,Q_s\\,H(Q)}{\\eta(Q)}$, con $Q_s=Q/3600$ (m³/s).\n"
+        "- **Curva del sistema:** $H(Q)=H_0 + K\\,(Q/3600)^2$.\n"
+        "- **Afinidad:** $Q\\propto n_p$ en 25–50 Hz.\n"
+        "- **Potencia hidráulica:** $P_h = \\rho g\\,Q_s\\,H(Q)/\\eta(Q)$, con $Q_s=Q/3600$.\n"
         "- **Par de bomba:** $T_{pump} = P_h/\\omega_p$, $\\omega_p=2\\pi n_p/60$.\n"
         "- **Reflejo al motor:** $T_{load,m}=T_{pump}/r$.\n"
-        "- **Dinámica (eje motor):** $\\dot\\omega_m=\\dfrac{T_{disp}-T_{load,m}}{J_{eq}}$ y el tiempo se integra como "
-        "$\\Delta t = J_{eq}\\,\\Delta\\omega_m / (T_{disp}-T_{load,m})$.\n"
-        "- **Eficiencia de bomba:** si existen coeficientes $(a,b,c)$ se usa $\\eta(Q)=a+b\\beta+c\\beta^2$, "
-        "con $\\beta=Q/Q_{ref}$ y recorte al rango especificado; si no, se asume un valor constante prudente.\n"
+        "- **Dinámica motor:** $\\dot\\omega_m=(T_{disp}-T_{load,m})/J_{eq}$; $\\Delta t = J_{eq}\\,\\Delta\\omega_m/(T_{disp}-T_{load,m})$.\n"
     )
-
-# Fin
