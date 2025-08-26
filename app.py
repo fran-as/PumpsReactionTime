@@ -117,7 +117,7 @@ ATTR = {
 
     # Hidráulica / pulpa
     "H0_m":                {"col": "H0_m",                  "unit": "m",     "type": "num"},
-    "K_H_per_Q":           {"col": "K_H_per_Q",             "unit": "—",     "type": "num"},   # H = H0 + K*(Q/3600)^2
+    "K_H_per_Q":           {"col": "K_m_s2",             "unit": "—",     "type": "num"},   # H = H0 + K*(Q/3600)^2
     "Qmin_m3h":            {"col": "Qmin_m3h",              "unit": "m³/h",  "type": "num"},
     "Qbest_m3h":           {"col": "Qbest_m3h",             "unit": "m³/h",  "type": "num"},
     "Qmax_m3h":            {"col": "Qmax_m3h",              "unit": "m³/h",  "type": "num"},
