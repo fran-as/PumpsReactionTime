@@ -39,7 +39,7 @@ def images_path(name: str) -> Path:
     return Path(__file__).with_name("images") / name
 
 # =============================================================================
-# Formateo y colores
+# Formateo y estilos visuales
 # =============================================================================
 
 def fmt_num(x, unit: str = "", ndigits: int = 2) -> str:
@@ -71,9 +71,20 @@ def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
         unsafe_allow_html=True,
     )
 
-# Variante para avisos de error (rojo)
 def pill_error(text: str):
     pill(text, bg="#fdecea", color="#b00020")
+
+def info_box(title: str, body_md: str):
+    st.markdown(
+        f"""
+        <div style="background:#f8f9fa; border:1px solid #e9ecef; border-radius:10px;
+                    padding:14px 16px; margin:8px 0">
+            <div style="font-weight:700; color:#343a40; margin-bottom:6px">{title}</div>
+            <div style="color:#495057">{body_md}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # =============================================================================
 # Lectura robusta y mapeo del dataset
@@ -269,7 +280,7 @@ def eta_from_Q(row: pd.Series, Q_m3h: np.ndarray) -> np.ndarray:
 def hydraulic_torque_on_motor(row: pd.Series,
                               n_p_rpm: np.ndarray,
                               Q_low_high: tuple[float, float],
-                              rho_kgm3: float | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                              rho_kgm3: float | None = None):
     g = 9.81
     rho_data = get_val(row, "SlurryDensity", np.nan)
     rho = rho_kgm3 if (rho_kgm3 and rho_kgm3 > 0) else (rho_data if not np.isnan(rho_data) else get_val(row, "rho_kgm3", 1000.0))
@@ -411,6 +422,19 @@ with colR:
             "- **Impulsor** (J_imp): manuales **Metso**.\n"
         )
 
+# Descripción adicional (texto)
+info_box(
+    "Descripción — Sección 2",
+    """
+    La **inercia equivalente** \\(J_{eq}\\) es la inercia "vista" por el eje del motor. Se compone de:
+    (1) inercias que ya están en el eje del motor (motor, polea motriz y su *bushing*), y
+    (2) inercias del lado de la bomba (polea conducida, *bushing* conducido e impulsor) **reflejadas** al eje del motor dividiendo por \\(r^2\\).
+    <br><br>
+    **Qué la aumenta:** impulsores más grandes/pesados, poleas de mayor inercia, *bushings* más macizos y **relaciones r pequeñas** (porque reducen menos la inercia reflejada).
+    **Qué la reduce:** impulsores livianos, selección de poleas con menor inercia y **relaciones r altas**.
+    """
+)
+
 st.markdown("---")
 
 # =============================================================================
@@ -452,6 +476,20 @@ with st.expander("Detalles y fórmulas — Sección 3", expanded=False):
     st.latex(r"t_{\mathrm{par}} = \dfrac{\Delta n_m}{\dot n_m}, \qquad t_{\mathrm{rampa}} = \dfrac{\Delta n_m}{\text{rampa}}")
     st.latex(r"\text{Criterio: } t = \max\{t_{\mathrm{par}},\,t_{\mathrm{rampa}}\}")
 
+# Descripción adicional (texto)
+info_box(
+    "Descripción — Sección 3",
+    """
+    La **aceleración por par** es cuán rápido sube la velocidad del motor solo por el par disponible:
+    \\(\\dot n_m = \\tfrac{60}{2\\pi}\\,\\tfrac{T_{disp}}{J_{eq}}\\).
+    <br><br>
+    El **tiempo por par** mide cuánto demora el motor en ir de la velocidad mínima a la máxima **si** la limitación fuera solo el par.
+    El **tiempo por rampa** es el tiempo que impone el propio VDF al fijar una pendiente de velocidad.
+    <br><br>
+    El **tiempo efectivo** es el **mayor** entre ambos: si el VDF acelera muy lento, manda la rampa; si acelera muy rápido, manda la inercia (par).
+    """
+)
+
 st.markdown("---")
 
 # =============================================================================
@@ -485,6 +523,23 @@ with c4d:
     st.markdown(f"- η (clip): {val_blue(eta_min*100, '%', 0)} – {val_blue(eta_max*100, '%', 0)}", unsafe_allow_html=True)
 
 # Slider de caudal adaptado a cada TAG
+def flow_slider_bounds(row: pd.Series):
+    qmin = get_val(row, "Q_min_m3h", np.nan)
+    qmax = get_val(row, "Q_max_m3h", np.nan)
+    qref = get_val(row, "Q_ref_m3h", np.nan)
+
+    if np.isnan(qmin) and not np.isnan(qref):
+        qmin = 0.7 * qref
+    if np.isnan(qmax) and not np.isnan(qref):
+        qmax = 1.3 * qref
+    if np.isnan(qmin) or np.isnan(qmax) or qmin <= 0 or qmax <= 0:
+        qmin, qmax = 100.0, 300.0
+
+    slider_min = max(0.0, 0.70 * qmin)  # -30% de Qmin
+    slider_max = 1.30 * qmax           # +30% de Qmax
+    default_low, default_high = float(qmin), float(qmax)
+    return float(slider_min), float(slider_max), (default_low, default_high)
+
 slider_min, slider_max, default_range = flow_slider_bounds(row)
 Q_min, Q_max = st.slider(
     "Rango de caudal considerado [m³/h]",
@@ -501,10 +556,35 @@ n_m_grid = np.linspace(n_m_min, n_m_max, N)
 n_p_grid = np.linspace(n_p_min, n_p_max, N)
 
 # Par resistente reflejado + potencia + eficiencia + Q(n_p)
+def hydraulic_torque_on_motor(row: pd.Series,
+                              n_p_rpm: np.ndarray,
+                              Q_low_high: tuple[float, float],
+                              rho_kgm3: float | None = None):
+    g = 9.81
+    rho_data = get_val(row, "SlurryDensity", np.nan)
+    rho = rho_kgm3 if (rho_kgm3 and rho_kgm3 > 0) else (rho_data if not np.isnan(rho_data) else get_val(row, "rho_kgm3", 1000.0))
+    r = get_val(row, "r", 1.0)
+    _, _, n_p_min, n_p_max, _ = rpm_bounds(row)
+
+    q_low, q_high = Q_low_high
+    if n_p_max <= n_p_min + 1e-9:
+        Q = np.full_like(n_p_rpm, q_low)
+    else:
+        Q = np.interp(n_p_rpm, [n_p_min, n_p_max], [q_low, q_high])
+
+    H = system_head_H(row, Q)
+    eta = eta_from_Q(row, Q)
+    Qs = Q / 3600.0
+    P_h = rho * g * Qs * H / np.maximum(eta, 1e-6)  # W
+    omega_p = 2.0 * np.pi * np.asarray(n_p_rpm, dtype=float) / 60.0
+    T_pump = np.where(omega_p > 1e-9, P_h / omega_p, 0.0)
+    T_load_m = T_pump / max(r, 1e-9)
+    return T_load_m, P_h, eta, Q
+
 T_load_m, P_h_W, eta_grid, Q_grid = hydraulic_torque_on_motor(row, n_p_grid, (Q_min, Q_max), rho_kgm3=rho_use)
 T_disp_m = np.full_like(T_load_m, T_nom_nm)
 
-# Gráfico 1: Par (sin línea 0)
+# Gráfico 1: Par
 fig_t = go.Figure()
 fig_t.add_trace(go.Scatter(x=n_p_grid, y=T_load_m, name="Par resistente reflejado (motor)", mode="lines"))
 fig_t.add_trace(go.Scatter(x=n_p_grid, y=T_disp_m, name="Par motor disponible", mode="lines"))
@@ -529,26 +609,23 @@ fig_p.update_layout(
 )
 st.plotly_chart(fig_p, use_container_width=True)
 
-# ── Integración temporal con chequeo de factibilidad ─────────────────────────
-# Mapear n_m → n_p para evaluar T_net(n_m) y dt/dn_m
+# Integración y factibilidad
 frac = (n_m_grid - n_m_min) / max((n_m_max - n_m_min), 1e-9)
 n_p_interp = n_p_min + frac * (n_p_max - n_p_min)
 T_load_m_i, _, _, _ = hydraulic_torque_on_motor(row, n_p_interp, (Q_min, Q_max), rho_kgm3=rho_use)
 T_disp_i = np.full_like(T_load_m_i, T_nom_nm)
 T_net_i = T_disp_i - T_load_m_i
-
 feasible = np.all(T_net_i > 0)
 
-# Gráfico 3: Integración (dt/dn_m) y área
+# Gráfico 3: dt/dn_m y área
 fig_int = go.Figure()
-dt_dn = np.where(T_net_i > 0, (J_eq * (2.0 * math.pi / 60.0)) / T_net_i, np.nan)  # s por rpm
+dt_dn = np.where(T_net_i > 0, (J_eq * (2.0 * math.pi / 60.0)) / T_net_i, np.nan)  # s/rpm
 fig_int.add_trace(
     go.Scatter(
         x=n_m_grid, y=dt_dn, mode="lines", name="dt/dn_m [s/rpm]",
         fill="tozeroy" if feasible else None
     )
 )
-# Si no es factible, marcar el cruce
 if not feasible:
     idx_neg = np.where(T_net_i <= 0)[0]
     i0 = int(idx_neg[0])
@@ -565,7 +642,7 @@ fig_int.update_layout(
 )
 st.plotly_chart(fig_int, use_container_width=True)
 
-# Calcular tiempo sólo si es factible
+# Tiempo hidráulico (solo si factible)
 if feasible and not (np.isnan(J_eq) or J_eq <= 0):
     omega_m_grid = 2.0 * math.pi * n_m_grid / 60.0
     d_omega = np.diff(omega_m_grid)
@@ -583,12 +660,10 @@ if feasible:
     which = "hidráulica" if (not np.isnan(t_hyd) and t_hyd > t_rampa) else "rampa VDF"
     pill(f"Tiempo limitante (sección 4): {which} = {fmt_num(t_lim_4, 's')}")
 else:
-    # Encontrar cruce aproximado para informar
     idx_neg = np.where(T_net_i <= 0)[0]
     i0 = int(idx_neg[0])
     n_m_cross = float(n_m_grid[i0])
     n_p_cross = float(n_p_interp[i0])
-    # Q y pares en el cruce (aprox.)
     T_load_cross, _, _, Q_cross_arr = hydraulic_torque_on_motor(row, np.array([n_p_cross]), (Q_min, Q_max), rho_kgm3=rho_use)
     Q_cross = float(Q_cross_arr[0])
     pill_error(
@@ -610,6 +685,25 @@ with st.expander("Detalles y fórmulas — Sección 4", expanded=False):
     st.latex(r"T_{\mathrm{net}}=T_{\mathrm{disp}}-T_{\mathrm{load,m}},\quad \Delta t = J_{\mathrm{eq}}\Delta\omega_m/T_{\mathrm{net}}")
     st.latex(r"\text{Tiempo total } t = \int_{n_{m,\min}}^{n_{m,\max}} \frac{J_{\mathrm{eq}}(2\pi/60)}{T_{\mathrm{net}}(n_m)}\, dn_m")
 
+# Descripción adicional (texto)
+info_box(
+    "Descripción — Sección 4",
+    """
+    Partimos de la **curva del sistema** \\(H(Q)=H_0+K(Q/3600)^2\\): \\(H_0\\) representa altura estática y
+    \\(K\\) las pérdidas por fricción. Entre 25–50 Hz, por **afinidad**, el caudal es proporcional a la
+    velocidad de la bomba, por lo que usamos el *slider* para fijar \\(Q\\) en los extremos y lo
+    **interpolamos** con la velocidad.
+    <br><br>
+    Con \\(H(Q)\\) y una **eficiencia** \\(\\eta(Q)\\) (polinomio si hay coeficientes o valor constante),
+    calculamos la **potencia hidráulica** \\(P_h=\\rho g Q_s H/\\eta\\), el **par de la bomba**
+    \\(T_{pump}=P_h/\\omega_p\\) y lo **reflejamos** al eje del motor: \\(T_{load,m}=T_{pump}/r\\).
+    <br><br>
+    El **par neto** es \\(T_{net}=T_{disp}-T_{load,m}\\). Cuando \\(T_{net}\\le 0\\), **no hay aceleración**.
+    Si \\(T_{net}>0\\), integramos la curva \\(\\mathrm{d}t/\\mathrm{d}n_m = J_{eq}(2\\pi/60)/T_{net}(n_m)\\)
+    entre la velocidad mínima y máxima: el **área bajo esa curva** es el **tiempo de reacción con carga hidráulica**.
+    """
+)
+
 st.markdown("---")
 
 # =============================================================================
@@ -618,12 +712,10 @@ st.markdown("---")
 
 st.markdown("## 5) Exportar resultados del TAG a CSV")
 
-# Serie para exportación (usa los vectores ya calculados)
 H_grid = system_head_H(row, Q_grid)
 omega_m_grid = 2.0 * math.pi * n_m_grid / 60.0
 T_net = T_disp_m - T_load_m
 
-# dt para exportar (si no factible, dejar NaN)
 if feasible and len(omega_m_grid) > 1:
     d_omega = np.diff(omega_m_grid)
     T_net_clip = np.maximum(T_net[:-1], 1e-9)
