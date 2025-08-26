@@ -216,7 +216,7 @@ n_p_max = get_attr(row, "n_p_max")
 
 # Hidráulica y eficiencia
 H0_m     = get_attr(row, "H0_m")
-K_ms2    = get_attr(row, "K_m_s2")          # ← K correcto (K_m_s2)
+K_ms2    = get_attr(row, "K_m_s2")
 R2_H     = get_attr(row, "R2_H")
 Q_min_ds = get_attr(row, "Qmin_m3h")
 Q_ref    = get_attr(row, "Q_ref_m3h")
@@ -252,7 +252,6 @@ with c2:
     st.markdown("**Motor & transmisión**")
     st.markdown(f"- Potencia motor instalada: {val_blue(P_motor_kW, 'kW')}", unsafe_allow_html=True)
     st.markdown(f"- Par nominal del motor: {val_blue(T_nom_nm, 'N·m')}", unsafe_allow_html=True)
-    # Fórmula de relación en LaTeX
     st.markdown(
         f"- Relación transmisión $\\big(r=\\tfrac{{n_{{motor}}}}{{n_{{bomba}}}}\\big)$: {val_blue(r_nm_np, '')}",
         unsafe_allow_html=True,
@@ -388,17 +387,24 @@ with c4d:
 with c4e:
     st.markdown(f"- R² eficiencia: {val_blue(R2_eta, '', 3)}", unsafe_allow_html=True)
 
-# ----- Rango de caudales para el análisis (limitado a −30% / +30% del TAG) -----
-def _fallback_qmin_qmax():
+# ----- Rango de caudales por TAG (±30% respecto a Qmin/Qmax del dataset) -----
+def _qmin_qmax_from_tag():
+    """Devuelve (qmin_base, qmax_base) y (qmin_allowed, qmax_allowed) por TAG."""
     if not np.isnan(Q_min_ds) and not np.isnan(Q_max_ds) and Q_min_ds < Q_max_ds:
-        return float(Q_min_ds), float(Q_max_ds)
-    return 100.0, 300.0
+        qmin_base = float(Q_min_ds)
+        qmax_base = float(Q_max_ds)
+    else:
+        # Fallback si el TAG no trae rango
+        qmin_base, qmax_base = 100.0, 300.0
 
-qmin_base, qmax_base = _fallback_qmin_qmax()
-qmin_allowed = 0.70 * qmin_base
-qmax_allowed = 1.30 * qmax_base
-qmin_allowed = max(0.0, qmin_allowed)
-qmax_allowed = max(qmin_allowed + 1.0, qmax_allowed)
+    qmin_allowed = max(0.0, 0.70 * qmin_base)
+    qmax_allowed = max(qmin_allowed + 1.0, 1.30 * qmax_base)
+    return qmin_base, qmax_base, qmin_allowed, qmax_allowed
+
+qmin_base, qmax_base, qmin_allowed, qmax_allowed = _qmin_qmax_from_tag()
+
+# Clave única por TAG para forzar re-creación del slider al cambiar de TAG
+slider_key = f"q_slider_{tag_sel}"
 
 Q_min, Q_max = st.slider(
     "Rango de caudal considerado [m³/h]  (límite: −30% desde Q_min y +30% desde Q_max del TAG)",
@@ -406,6 +412,7 @@ Q_min, Q_max = st.slider(
     max_value=float(qmax_allowed),
     value=(float(qmin_base), float(qmax_base)),
     step=1.0,
+    key=slider_key,
 )
 
 # Mapear velocidad bomba → caudal (lineal 25–50 Hz)
@@ -505,7 +512,6 @@ with c_time:
     t_rampa_local = (n_m_max - n_m_min) / max(rampa_vdf, 1e-9)
     t_lim_4 = max(t_hyd, t_rampa_local) if not np.isnan(t_hyd) else t_rampa_local
     which = "hidráulica" if (not np.isnan(t_hyd) and t_hyd > t_rampa_local) else "rampa VDF"
-    # sin ** para evitar asteriscos literales dentro del HTML
     pill(f"Tiempo limitante (sección 4): {which} = {fmt_num(t_lim_4, 's')}")
 
 with st.expander("Detalles y fórmulas — Sección 4", expanded=False):
