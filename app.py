@@ -111,8 +111,8 @@ ATTR = {
     "J_m":                 {"col": "motor_j_kgm2",          "unit": "kg·m²", "type": "num"},
     "J_driver":            {"col": "driverpulley_j_kgm2",   "unit": "kg·m²", "type": "num"},
     "J_sleeve_driver":     {"col": "driverbushing_j_kgm2",  "unit": "kg·m²", "type": "num"},
-    "J_driven":            {"col": "drivenpulley_j_Kgm2",   "unit": "kg·m²", "type": "num"},   # ojo: 'K' mayúscula
-    "J_sleeve_driven":     {"col": "drivenbushing_j_Kgm2",  "unit": "kg·m²", "type": "num"},   # ojo: 'K' mayúscula
+    "J_driven":            {"col": "drivenpulley_j_kgm2",   "unit": "kg·m²", "type": "num"},   # ojo: 'K' mayúscula
+    "J_sleeve_driven":     {"col": "drivenbushing_j_kgm2",  "unit": "kg·m²", "type": "num"},   # ojo: 'K' mayúscula
     "J_imp":               {"col": "impeller_j_kgm2",       "unit": "kg·m²", "type": "num"},
 
     # Hidráulica / pulpa
@@ -122,7 +122,7 @@ ATTR = {
     "Qbest_m3h":           {"col": "Qbest_m3h",             "unit": "m³/h",  "type": "num"},
     "Qmax_m3h":            {"col": "Qmax_m3h",              "unit": "m³/h",  "type": "num"},
     "eta":                 {"col": "eta",                   "unit": "",      "type": "num"},
-    "SlurryDensity":       {"col": "SlurryDensity_Kgm3",    "unit": "kg/m³", "type": "num"},
+    "SlurryDensity":       {"col": "SlurryDensity_kgm3",    "unit": "kg/m³", "type": "num"},
 }
 
 
@@ -293,7 +293,7 @@ st.markdown("---")
 st.markdown("## 3) Tiempo inercial (par disponible vs rampa VDF)")
 
 # Slider rampa en el motor
-rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=400, value=100, step=5)
+rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=600, value=100, step=5)
 
 # Aceleración por par disponible (en rpm/s) y tiempos
 if not (np.isnan(J_eq) or np.isnan(T_nom_nm) or J_eq <= 0):
