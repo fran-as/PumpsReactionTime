@@ -67,52 +67,60 @@ def val_blue(x, unit="", ndigits=2) -> str:
 def val_green(x, unit="", ndigits=2) -> str:
     return color_value(fmt_num(x, unit, ndigits), GREEN)
 
-# Mapeo de columnas -----------------------------------------------------------
+# === MAPEOS DESDE dataset.csv (sep=';' decimal=',') ===
+ATTR = {
+    # Identificación / rating
+    "TAG":                 {"col": "TAG",                   "unit": "",      "type": "str"},
+    "pump_model":          {"col": "pumpmodel",             "unit": "",      "type": "str"},
+    "impeller_d_mm":       {"col": "impeller_d_mm",         "unit": "mm",    "type": "num"},
+    "motorpower_kw":       {"col": "motorpower_kw",         "unit": "kW",    "type": "num"},
+    "t_nom_nm":            {"col": "t_nom_nm",              "unit": "N·m",   "type": "num"},
+    "r":                   {"col": "r_trans",               "unit": "",      "type": "num"},
+    "n_m_min":             {"col": "motor_n_min_rpm",       "unit": "rpm",   "type": "num"},
+    "n_m_max":             {"col": "motor_n_max_rpm",       "unit": "rpm",   "type": "num"},
+    "n_p_min":             {"col": "pump_n_min_rpm",        "unit": "rpm",   "type": "num"},
+    "n_p_max":             {"col": "pump_n_max_rpm",        "unit": "rpm",   "type": "num"},
 
-ALIASES = {
-    "tag": ["tag", "TAG", "Tag"],
-    "pump_model": ["pumpmodel", "pump_model", "Modelo", "ModeloBomba"],
-    "motor_power_kw": ["motorpower_kw", "motor_power_kw", "P_motor_kW"],
-    "t_nom_nm": ["t_nom_nm", "torque_nom_nm", "T_nom_nm"],
-    "r_nm_np": ["r_trans", "ratio_nm_np", "r", "r_nm_np"],
-    # Inercias
-    "J_m": ["motor_j_kgm2", "J_motor_kgm2", "Jm_kgm2"],
-    "J_driver": ["driver_j_kgm2", "J_driver_kgm2", "J_polea_motriz_kgm2"],
-    "J_driven": ["driven_j_kgm2", "J_driven_kgm2", "J_polea_conducida_kgm2"],
-    "J_imp": ["impeller_j_kgm2", "J_imp_kgm2", "J_rotor_bomba_kgm2"],
-    "impeller_d_mm": ["impeller_d_mm", "D_imp_mm", "diametro_impulsor_mm"],
-    # Velocidades/caudales de referencia
-    "n_ref_rpm": ["n_ref_rpm", "n_p_ref_rpm", "n_bomba_ref_rpm"],
-    "Q_ref_m3h": ["Q_ref_m3h", "Qref_m3h"],
-    "Q_min_m3h": ["Q_min_m3h"],
-    "Q_max_m3h": ["Q_max_m3h"],
-    # Curva de sistema
-    "H0_m": ["H0_m", "H_0_m"],
-    "K_m_s2": ["K_m_s2", "K_m_per_(m3h)^2", "K_m"],
-    # Eficiencia
-    "eta_a": ["eta_a"],
-    "eta_b": ["eta_b"],
-    "eta_c": ["eta_c"],
-    "eta_beta": ["eta_beta"],
-    "eta_min_clip": ["eta_min_clip"],
-    "eta_max_clip": ["eta_max_clip"],
-    # Densidad de pulpa
-    "rho_kgm3": ["SlurryDensity_Kgm3", "rho_kgm3", "density_kgm3"],
+    # Inercias (catálogo TB Woods / Metso)  -------------------------
+    "J_m":                 {"col": "motor_j_kgm2",          "unit": "kg·m²", "type": "num"},
+    "J_driver":            {"col": "driverpulley_j_kgm2",   "unit": "kg·m²", "type": "num"},
+    "J_sleeve_driver":     {"col": "driverbushing_j_kgm2",  "unit": "kg·m²", "type": "num"},  # ≈10% de J_driver si falta
+    "J_driven":            {"col": "drivenpulley_j_Kgm2",   "unit": "kg·m²", "type": "num"},
+    "J_sleeve_driven":     {"col": "drivenbushing_j_Kgm2",  "unit": "kg·m²", "type": "num"},  # ≈10% de J_driven si falta
+    "J_imp":               {"col": "impeller_j_kgm2",       "unit": "kg·m²", "type": "num"},
+
+    # Hidráulica / pulpa
+    "H0_m":                {"col": "H0_m",                  "unit": "m",     "type": "num"},
+    "K_H_per_Q":           {"col": "K_H_per_Q",             "unit": "m/(m³/h)", "type": "num"},
+    "Qmin_m3h":            {"col": "Qmin_m3h",              "unit": "m³/h",  "type": "num"},
+    "Qbest_m3h":           {"col": "Qbest_m3h",             "unit": "m³/h",  "type": "num"},
+    "Qmax_m3h":            {"col": "Qmax_m3h",              "unit": "m³/h",  "type": "num"},
+    "eta":                 {"col": "eta",                   "unit": "",      "type": "num"},
+    "SlurryDensity":       {"col": "SlurryDensity_Kgm3",    "unit": "kg/m³", "type": "num"},
 }
 
-def col_lookup(df: pd.DataFrame, key: str) -> str | None:
-    if key not in ALIASES:
-        return None
-    lower = [c.lower() for c in df.columns]
-    for alias in ALIASES[key]:
-        if alias.lower() in lower:
-            return df.columns[lower.index(alias.lower())]
-    return None
+def get_val(row, key, default=np.nan):
+    meta = ATTR[key]
+    col = meta["col"]
+    v = row.get(col, default)
+    if meta["type"] == "num":
+        try:
+            return float(v)
+        except Exception:
+            return default
+    return v
 
-def load_data() -> pd.DataFrame:
-    df = pd.read_csv(dataset_path(), sep=";", decimal=",", dtype=str)
-    df.columns = [c.strip() for c in df.columns]
-    return df
+def val_blue(x, unit=""):
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "<span style='color:#1f77b4'>—</span>"
+    u = f" {unit}" if unit else ""
+    return f"<span style='color:#1f77b4'><b>{x:,.2f}</b>{u}</span>"
+
+def val_green(x, unit=""):
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "<span style='color:#2ca02c'>—</span>"
+    u = f" {unit}" if unit else ""
+    return f"<span style='color:#2ca02c'><b>{x:,.2f}</b>{u}</span>"
 
 # =============================================================================
 # Encabezado con logos + título
@@ -219,60 +227,55 @@ with c3:
 
 st.markdown("---")
 
-# =============================================================================
+# ────────────────────────────────────────────────────────────────────────────
 # 2) Cálculo de inercia equivalente
-# =============================================================================
+# ────────────────────────────────────────────────────────────────────────────
+st.header("2) Cálculo de inercia equivalente")
 
-st.markdown("## 2) Cálculo de inercia equivalente")
+colL, colR = st.columns([1.1, 1])
 
-left, right = st.columns([1.1, 1.2])
-with left:
-    st.markdown("**Inercias individuales**")
-    # Manguitos ≈ 10% de la polea correspondiente
-    J_sleeve_driver = 0.10 * J_driver if not np.isnan(J_driver) else np.nan
-    J_sleeve_driven = 0.10 * J_driven if not np.isnan(J_driven) else np.nan
+with colL:
+    st.subheader("Inercias individuales")
+
+    J_m = get_val(row, "J_m", 0.0)
+    J_driver = get_val(row, "J_driver", 0.0)
+    J_sleeve_driver = get_val(row, "J_sleeve_driver", np.nan)
+    if np.isnan(J_sleeve_driver):  # fallback 10% catálogo TB Woods
+        J_sleeve_driver = 0.10 * J_driver
+
+    J_driven = get_val(row, "J_driven", 0.0)
+    J_sleeve_driven = get_val(row, "J_sleeve_driven", np.nan)
+    if np.isnan(J_sleeve_driven):  # fallback 10%
+        J_sleeve_driven = 0.10 * J_driven
+
+    J_imp = get_val(row, "J_imp", 0.0)
+    r     = max(get_val(row, "r", 1.0), 1e-6)
 
     st.markdown(f"- Motor (J_m): {val_blue(J_m, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Polea motriz (J_driver): {val_blue(J_driver, 'kg·m²')}", unsafe_allow_html=True)
-    st.markdown(f"- Manguito motriz (J_sleeve_driver≈10% J_driver): {val_green(J_sleeve_driver, 'kg·m²')}", unsafe_allow_html=True)
+    st.markdown(f"- Manguito motriz (J_sleeve_driver≈10% J_driver): {val_blue(J_sleeve_driver, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Polea conducida (J_driven): {val_blue(J_driven, 'kg·m²')}", unsafe_allow_html=True)
-    st.markdown(f"- Manguito conducido (J_sleeve_driven≈10% J_driven): {val_green(J_sleeve_driven, 'kg·m²')}", unsafe_allow_html=True)
+    st.markdown(f"- Manguito conducido (J_sleeve_driven≈10% J_driven): {val_blue(J_sleeve_driven, 'kg·m²')}", unsafe_allow_html=True)
     st.markdown(f"- Impulsor/rotor de bomba (J_imp): {val_blue(J_imp, 'kg·m²')}", unsafe_allow_html=True)
-    st.markdown(f"- Relación r (n_m/n_p): {val_blue(r_nm_np)}", unsafe_allow_html=True)
+    st.markdown(f"- Relación r (n_m/n_p): {val_blue(r, '')}", unsafe_allow_html=True)
 
-with right:
-    st.markdown("**Fórmula utilizada**")
-    st.latex(r"J_{\mathrm{eq}} \;=\; J_m \;+\; (J_{\mathrm{driver}} + J_{\mathrm{sleeve,drv}}) \;+\; \dfrac{J_{\mathrm{driven}} + J_{\mathrm{sleeve,drn}} + J_{\mathrm{imp}}}{r^2}")
-    st.caption(
-        r"Las inercias del lado bomba giran a $\omega_p=\omega_m/r$. "
-        r"Igualando energías cinéticas a una $\omega_m$ común, los términos del lado bomba se dividen por $r^2$."
-    )
+    # J_eq en el eje del motor (inercias del lado bomba vistas /r²)
+    J_eq = (J_m + J_driver + J_sleeve_driver) + (J_driven + J_sleeve_driven + J_imp) / (r**2)
 
-# Inercia equivalente
-if not np.isnan(r_nm_np) and r_nm_np > 0:
-    J_eq = (
-        (J_m if not np.isnan(J_m) else 0.0)
-        + (J_driver if not np.isnan(J_driver) else 0.0)
-        + (J_sleeve_driver if not np.isnan(J_sleeve_driver) else 0.0)
-        + ( (J_driven if not np.isnan(J_driven) else 0.0)
-            + (J_sleeve_driven if not np.isnan(J_sleeve_driven) else 0.0)
-            + (J_imp if not np.isnan(J_imp) else 0.0)
-          ) / (r_nm_np**2)
-    )
-else:
-    J_eq = float("nan")
+    st.markdown(f"**Inercia equivalente (J_eq):** {val_green(J_eq, 'kg·m²')}", unsafe_allow_html=True)
 
-st.markdown(f"**Inercia equivalente (J_eq):** {val_green(J_eq, 'kg·m²')}", unsafe_allow_html=True)
-
-with st.expander("Formulación de las inercias por componente"):
-    st.markdown(
-        "- **Poleas (J_driver, J_driven):** valores **obtenidos del catálogo TB Woods**.\n"
-        "- **Manguitos/bushings:** **10% de la inercia** de la polea correspondiente (aprox.).\n"
-        "- **Impulsor (J_imp):** de **manuales Metso**.\n"
-        "- **Motor (J_m):** inercia del rotor del fabricante.\n"
-    )
-
-st.markdown("---")
+with colR:
+    st.subheader("Fórmula utilizada")
+    st.latex(r"J_{\mathrm{eq}} \;=\; J_m \;+\; J_{\mathrm{driver}} \;+\; J_{\mathrm{sleeve,driver}} \;+\; \frac{J_{\mathrm{driven}} + J_{\mathrm{sleeve,driven}} + J_{\mathrm{imp}}}{r^2}")
+    with st.expander("Formulación de las inercias por componente", expanded=True):
+        st.markdown(
+            "- **Motor** (J_m): obtenidas de hojas de datos **WEG**.\n"
+            "- **Poleas** (J_driver, J_driven): obtenidas de catálogo **TB Woods**.\n"
+            "- **Manguitos** (J_sleeve_driver, J_sleeve_driven): si no hay dato, se aproxima **10%** de la inercia de su polea.\n"
+            "- **Impulsor** (J_imp): de manuales **Metso**.\n\n"
+            "Las inercias del lado bomba giran a \(\\omega_p=\\omega_m/r\\). "
+            "Igualando energías cinéticas a una \(\\omega_m\\) común se obtiene la división por \(r^2\) para términos del lado de la bomba."
+        )
 
 # =============================================================================
 # 3) Tiempo inercial (par vs rampa)
