@@ -90,50 +90,74 @@ def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
     )
 
 
-# =============================================================================
-# Mapeo de columnas del dataset (acepta variantes en mayúsculas/minúsculas)
-# =============================================================================
+# Mapeo 1:1 contra dataset.csv (sep=';' decimal=',')
+# type: "num" → convertir con get_num(); "str" → usar tal cual.
 ATTR = {
-    # Identificación / rating
-    "TAG":                 {"cols": ["TAG"],                        "unit": "",      "type": "str"},
-    "pump_model":          {"cols": ["pumpmodel", "pump_model"],    "unit": "",      "type": "str"},
-    "impeller_d_mm":       {"cols": ["impeller_d_mm"],              "unit": "mm",    "type": "num"},
-    "motorpower_kw":       {"cols": ["motorpower_kw"],              "unit": "kW",    "type": "num"},
-    "t_nom_nm":            {"cols": ["t_nom_nm"],                   "unit": "N·m",   "type": "num"},
-    "r":                   {"cols": ["r_trans", "r_nm_np"],         "unit": "",      "type": "num"},
-    "n_m_min":             {"cols": ["motor_n_min_rpm"],            "unit": "rpm",   "type": "num"},
-    "n_m_max":             {"cols": ["motor_n_max_rpm"],            "unit": "rpm",   "type": "num"},
-    "n_p_min":             {"cols": ["pump_n_min_rpm"],             "unit": "rpm",   "type": "num"},
-    "n_p_max":             {"cols": ["pump_n_max_rpm"],             "unit": "rpm",   "type": "num"},
+    # ── Identificación / transmisión ─────────────────────────────────────────
+    "TAG":                 {"col": "TAG",                  "unit": "",        "type": "str"},
+    "r":                   {"col": "r_trans",              "unit": "",        "type": "num"},   # r = n_motor / n_bomba
+    "series":              {"col": "series",               "unit": "",        "type": "str"},
+    "grooves":             {"col": "grooves",              "unit": "",        "type": "str"},
+    "centerdistance_mm":   {"col": "centerdistance_mm",    "unit": "mm",      "type": "num"},
 
-    # Inercias (catálogo TB Woods / Metso)
-    "J_m":                 {"cols": ["motor_j_kgm2"],               "unit": "kg·m²", "type": "num"},
-    "J_driver":            {"cols": ["driverpulley_j_kgm2"],        "unit": "kg·m²", "type": "num"},
-    "J_sleeve_driver":     {"cols": ["driverbushing_j_kgm2"],       "unit": "kg·m²", "type": "num"},
-    "J_driven":            {"cols": ["drivenpulley_j_kgm2", "drivenpulley_j_Kgm2"],
-                                                                  "unit": "kg·m²", "type": "num"},
-    "J_sleeve_driven":     {"cols": ["drivenbushing_j_kgm2", "drivenbushing_j_Kgm2"],
-                                                                  "unit": "kg·m²", "type": "num"},
-    "J_imp":               {"cols": ["impeller_j_kgm2"],            "unit": "kg·m²", "type": "num"},
+    # ── Geometría poleas / ejes (catálogo TB Woods) ─────────────────────────
+    "driver_od_in":        {"col": "driver_od_in",         "unit": "in",      "type": "num"},
+    "driver_bushing":      {"col": "driver_bushing",       "unit": "",        "type": "str"},
+    "driver_shaft_mm":     {"col": "driver_shaft_mm",      "unit": "mm",      "type": "num"},
+    "driven_od_in":        {"col": "driven_od_in",         "unit": "in",      "type": "num"},
+    "driven_weight_lb":    {"col": "driven_weight_lb",     "unit": "lb",      "type": "num"},
+    "driven_bushing":      {"col": "driven_bushing",       "unit": "",        "type": "str"},
+    "driven_shaft_mm":     {"col": "driven_shaft_mm",      "unit": "mm",      "type": "num"},
 
-    # Hidráulica / pulpa
-    "H0_m":                {"cols": ["H0_m", "h0_m"],               "unit": "m",     "type": "num"},
-    "K_m_s2":              {"cols": ["K_m_s2", "k_m_s2"],           "unit": "",      "type": "num"},  # H=H0+K*(Q/3600)^2
-    "Qmin_m3h":            {"cols": ["Qmin_m3h", "qmin_m3h"],       "unit": "m³/h",  "type": "num"},
-    "Qbest_m3h":           {"cols": ["Qbest_m3h", "qbest_m3h"],     "unit": "m³/h",  "type": "num"},
-    "Qmax_m3h":            {"cols": ["Qmax_m3h", "qmax_m3h"],       "unit": "m³/h",  "type": "num"},
-    "R2_H":                {"cols": ["R2_H", "r2_h"],               "unit": "",      "type": "num"},
-    "SlurryDensity":       {"cols": ["slurrydensity_kgm3", "SlurryDensity_Kgm3"],
-                                                                  "unit": "kg/m³", "type": "num"},
+    # ── Bomba / motor ───────────────────────────────────────────────────────
+    "pump_model":          {"col": "pumpmodel",            "unit": "",        "type": "str"},
+    "motorpower_kw":       {"col": "motorpower_kw",        "unit": "kW",      "type": "num"},
+    "poles":               {"col": "poles",                "unit": "",        "type": "num"},
+    "t_nom_nm":            {"col": "t_nom_nm",             "unit": "N·m",     "type": "num"},
+    "J_m":                 {"col": "motor_j_kgm2",         "unit": "kg·m²",   "type": "num"},
 
-    # Eficiencia (polinomio en β = Q/Q_ref)
-    "eta_a":               {"cols": ["eta_a"],                      "unit": "",      "type": "num"},
-    "eta_b":               {"cols": ["eta_b"],                      "unit": "",      "type": "num"},
-    "eta_c":               {"cols": ["eta_c"],                      "unit": "",      "type": "num"},
-    "R2_eta":              {"cols": ["R2_eta", "r2_eta"],           "unit": "",      "type": "num"},
-    "Q_ref_m3h":           {"cols": ["Q_ref_m3h", "q_ref_m3h", "Qbest_m3h", "qbest_m3h"],
-                                                                  "unit": "m³/h",  "type": "num"},
-    "eta":                 {"cols": ["eta", "efficiency"],          "unit": "",      "type": "num"},   # fallback
+    # ── Impulsor (Metso) ────────────────────────────────────────────────────
+    "impeller_d_mm":       {"col": "impeller_d_mm",        "unit": "mm",      "type": "num"},
+    "impeller_mass_kg":    {"col": "impeller_mass_kg",     "unit": "kg",      "type": "num"},
+    "J_imp":               {"col": "impeller_j_kgm2",      "unit": "kg·m²",   "type": "num"},
+
+    # ── Velocidades (25–50 Hz) ──────────────────────────────────────────────
+    "n_m_min":             {"col": "motor_n_min_rpm",      "unit": "rpm",     "type": "num"},
+    "n_m_max":             {"col": "motor_n_max_rpm",      "unit": "rpm",     "type": "num"},
+    "n_p_min":             {"col": "pump_n_min_rpm",       "unit": "rpm",     "type": "num"},
+    "n_p_max":             {"col": "pump_n_max_rpm",       "unit": "rpm",     "type": "num"},
+    "n_ref_rpm":           {"col": "n_ref_rpm",            "unit": "rpm",     "type": "num"},
+
+    # ── Poleas y BUSHINGS (TB Woods) ────────────────────────────────────────
+    "driverpulley_weight_kg": {"col": "driverpulley_weight_kg", "unit": "kg",   "type": "num"},
+    "J_driver":            {"col": "driverpulley_j_kgm2",  "unit": "kg·m²",   "type": "num"},
+    # Nota: claves "Bushing" y "Sleeve" referencian la MISMA columna para compatibilidad
+    "J_bushing_driver":    {"col": "driverbushing_j_kgm2", "unit": "kg·m²",   "type": "num"},
+    "J_sleeve_driver":     {"col": "driverbushing_j_kgm2", "unit": "kg·m²",   "type": "num"},
+    "J_driven":            {"col": "drivenpulley_j_kgm2",  "unit": "kg·m²",   "type": "num"},
+    "J_bushing_driven":    {"col": "drivenbushing_j_kgm2", "unit": "kg·m²",   "type": "num"},
+    "J_sleeve_driven":     {"col": "drivenbushing_j_kgm2", "unit": "kg·m²",   "type": "num"},
+
+    # ── Curva del sistema H(Q)=H0+K(Q/3600)^2 ───────────────────────────────
+    "H0_m":                {"col": "H0_m",                 "unit": "m",       "type": "num"},
+    "K_m_s2":              {"col": "K_m_s2",               "unit": "",        "type": "num"},
+    "R2_H":                {"col": "R2_H",                 "unit": "",        "type": "num"},
+
+    # ── Eficiencia η(Q)=η_a+η_bβ+η_cβ² (β=Q/Q_ref) ─────────────────────────
+    "eta_a":               {"col": "eta_a",                "unit": "",        "type": "num"},
+    "eta_b":               {"col": "eta_b",                "unit": "",        "type": "num"},
+    "eta_c":               {"col": "eta_c",                "unit": "",        "type": "num"},
+    "R2_eta":              {"col": "R2_eta",               "unit": "",        "type": "num"},
+    "Q_min_m3h":           {"col": "Q_min_m3h",            "unit": "m³/h",    "type": "num"},
+    "Q_max_m3h":           {"col": "Q_max_m3h",            "unit": "m³/h",    "type": "num"},
+    "Q_ref_m3h":           {"col": "Q_ref_m3h",            "unit": "m³/h",    "type": "num"},
+    "eta_beta":            {"col": "eta_beta",             "unit": "",        "type": "num"},
+    "eta_min_clip":        {"col": "eta_min_clip",         "unit": "",        "type": "num"},
+    "eta_max_clip":        {"col": "eta_max_clip",         "unit": "",        "type": "num"},
+
+    # ── Densidades ──────────────────────────────────────────────────────────
+    "rho_kgm3":            {"col": "rho_kgm3",             "unit": "kg/m³",   "type": "num"},   # genérica/agua
+    "SlurryDensity":       {"col": "SlurryDensity_kgm3",   "unit": "kg/m³",   "type": "num"},   # pulpa (para sección 4)
 }
 
 def _get_from_row(row: pd.Series, candidates: list[str], default=np.nan):
