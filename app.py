@@ -55,10 +55,11 @@ def val_green(x, unit="", ndigits=2) -> str:
     return color_value(fmt_num(x, unit, ndigits), GREEN)
 
 def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
+    # No usar Markdown (**) dentro: solo HTML para evitar ** visibles
     st.markdown(
         f"""
         <div style="border-left: 5px solid {color}; background:{bg}; padding:0.8rem 1rem; border-radius:0.5rem; margin-top:0.5rem">
-            <b style="color:{color}">{text}</b>
+            <span style="color:{color}; font-weight:600">{text}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -68,7 +69,7 @@ def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
 def load_data() -> pd.DataFrame:
     p = dataset_path()
     df = pd.read_csv(p, sep=";", decimal=",")
-    # Validación mínima de columnas
+    # Validación de columnas mínimas
     needed = [
         "TAG","pumpmodel","impeller_d_mm","motorpower_kw","t_nom_nm","r_trans",
         "motor_n_min_rpm","motor_n_max_rpm","pump_n_min_rpm","pump_n_max_rpm",
@@ -208,8 +209,9 @@ with colR:
     st.latex(r"J_{\mathrm{eq}} \;=\; J_m \;+\; J_{\mathrm{driver}} \;+\; J_{\mathrm{bushing,driver}} \;+\; \dfrac{J_{\mathrm{driven}} + J_{\mathrm{bushing,driven}} + J_{\mathrm{imp}}}{r^2}")
     with st.expander("Formulación de las inercias por componente", expanded=True):
         st.markdown(
+            "- **Motor**: hojas de datos **WEG**.\n"
             "- **Poleas**: catálogo **TB Woods**.\n"
-            "- **Bushing**: si falta dato, se aproxima **10%** de la polea asociada.\n"
+            "- **Bushing**: se aproxima **10%** de la polea asociada.\n"
             "- **Impulsor**: manuales **Metso**.\n\n"
             "Las inercias del lado bomba giran a \(\\omega_p=\\omega_m/r\\). Igualando energías cinéticas a una \(\\omega_m\\) común resulta la división por \(r^2\) para las del lado de la bomba."
         )
@@ -241,8 +243,11 @@ with st.expander("Descripción — Sección 3"):
     st.latex(r"n_m=\tfrac{60}{2\pi}\,\omega_m\Rightarrow \dot n_m=\tfrac{60}{2\pi}\,\tfrac{T_{\rm disp}}{J_{\rm eq}}")
     st.latex(r"t_{\rm par}=\dfrac{\Delta n_m}{\dot n_m}\qquad t_{\rm rampa}=\dfrac{\Delta n_m}{\text{rampa}}")
 
-lim3 = "Tiempo limitante (sección 3): "
-pill(lim3 + (f"por **par** = {fmt_num(t_par, 's')}" if t_par > t_rampa else f"por **rampa VDF** = {fmt_num(t_rampa, 's')}"))
+# Bloque verde (Sección 3)
+if t_par > t_rampa:
+    pill(f"Tiempo limitante (sección 3): por par = {fmt_num(t_par, 's')}")
+else:
+    pill(f"Tiempo limitante (sección 3): por rampa VDF = {fmt_num(t_rampa, 's')}")
 
 st.markdown("---")
 
@@ -251,19 +256,6 @@ st.markdown("---")
 # =============================================================================
 
 st.markdown("## 4) Carga hidráulica con modelo de potencia \(P(Q)\)")
-
-with st.expander("Descripción — Sección 4", expanded=False):
-    st.markdown(
-        "Se usa la **potencia al eje** como función del caudal a partir de los puntos de operación del TAG. "
-        "Se prescinde de la eficiencia explícita y se trabaja con el ajuste \(P(Q)\) en **kW**."
-    )
-    st.latex(r"P(Q)=a_0 + a_1\,Q + a_2\,Q^2 + a_3\,Q^3\quad (\text{kW})")
-    st.markdown("El caudal se obtiene por **afinidad estricta** dentro de 25–50 Hz:")
-    st.latex(r"Q(n_p) = Q_{\min} + (Q_{\max}-Q_{\min})\,\dfrac{n_p-n_{p,\min}}{n_{p,\max}-n_{p,\min}}")
-    st.markdown("Par en la bomba y reflejado al motor:")
-    st.latex(r"T_{\rm pump}(n_p)=\dfrac{P(Q(n_p))\cdot 1000}{\omega_p},\quad \omega_p=\dfrac{2\pi n_p}{60},\qquad T_{\rm load,m}=\dfrac{T_{\rm pump}}{r}")
-    st.markdown("Dinámica en el eje motor y tiempo por integración numérica si \(T_{\rm net}>0\):")
-    st.latex(r"\dot\omega_m=\dfrac{T_{\rm disp}-T_{\rm load,m}}{J_{\rm eq}},\qquad \Delta t=J_{\rm eq}\,\dfrac{\Delta\omega_m}{T_{\rm net}},\quad \frac{dt}{dn_m}=J_{\rm eq}\,\frac{2\pi}{60}\,\frac{1}{T_{\rm net}}")
 
 # Slider en velocidad bomba (25–50 Hz del TAG)
 n_p_lo, n_p_hi = st.slider(
@@ -278,9 +270,12 @@ n_p_grid = np.linspace(n_p_lo, n_p_hi, N)
 Q_grid   = Q_min + (Q_max - Q_min) * (n_p_grid - n_p_min) / max((n_p_max - n_p_min), 1e-9)
 
 # Potencia al eje P(Q) [kW] respetando el grado del ajuste
-if P_order == 1:
+a0 = float(row["P_a0_kW"]); a1 = float(row["P_a1_kW_per_m3h"])
+a2 = float(row["P_a2_kW_per_m3h2"]); a3 = float(row["P_a3_kW_per_m3h3"])
+order = int(row["P_order"])
+if order == 1:
     P_kW = a0 + a1*Q_grid
-elif P_order == 2:
+elif order == 2:
     P_kW = a0 + a1*Q_grid + a2*(Q_grid**2)
 else:
     P_kW = a0 + a1*Q_grid + a2*(Q_grid**2) + a3*(Q_grid**3)
@@ -324,13 +319,27 @@ T_net      = T_motor - T_load_m
 
 if np.any(T_net <= 0.0):
     st.markdown(f"- Tiempo por carga **hidráulica** (integración): {val_green(float('nan'), 's')}", unsafe_allow_html=True)
-    pill("Tiempo limitante (sección 4): **par insuficiente** en el rango seleccionado. Ajuste el rango o verifique el TAG.")
+    st.markdown(f"- Tiempo por **rampa VDF** (para comparación): {val_blue(t_rampa, 's')}", unsafe_allow_html=True)
+
+    with st.expander("Descripción — Sección 4", expanded=False):
+        st.markdown(
+            "Se usa la **potencia al eje** como función del caudal ajustada a puntos del TAG. "
+            "El caudal se obtiene por afinidad estricta en 25–50 Hz."
+        )
+        st.latex(r"P(Q)=a_0 + a_1\,Q + a_2\,Q^2 + a_3\,Q^3\quad (\text{kW})")
+        st.latex(r"Q(n_p) = Q_{\min} + (Q_{\max}-Q_{\min})\,\dfrac{n_p-n_{p,\min}}{n_{p,\max}-n_{p,\min}}")
+        st.latex(r"T_{\rm pump}(n_p)=\dfrac{P(Q(n_p))\cdot 1000}{\omega_p},\ \ \omega_p=\dfrac{2\pi n_p}{60},\ \ T_{\rm load,m}=\dfrac{T_{\rm pump}}{r}")
+        st.latex(r"\dot\omega_m=\dfrac{T_{\rm disp}-T_{\rm load,m}}{J_{\rm eq}},\ \ \Delta t=J_{\rm eq}\,\dfrac{\Delta\omega_m}{T_{\rm net}},\ \ \frac{dt}{dn_m}=J_{\rm eq}\,\frac{2\pi}{60}\,\frac{1}{T_{\rm net}}")
+        st.markdown("Si \(T_{net}\le 0\) en el rango seleccionado, el motor no puede acelerar: **par insuficiente**.")
+    pill("Tiempo limitante (sección 4): par insuficiente en el rango seleccionado. Ajuste el rango o verifique el TAG.")
 else:
     d_omega = np.diff(omega_m)
     dt = (J_eq * d_omega) / T_net[:-1]
     t_hyd = float(np.sum(dt))
+
+    # Mostrar tiempos comparables
     st.markdown(f"- Tiempo por carga **hidráulica** (integración): {val_green(t_hyd, 's')}", unsafe_allow_html=True)
-    pill(f"Tiempo limitante (sección 4): **hidráulica = {fmt_num(t_hyd, 's')}**")
+    st.markdown(f"- Tiempo por **rampa VDF** (para comparación): {val_blue(t_rampa, 's')}", unsafe_allow_html=True)
 
     # Curva dt/dn_m y área integrada
     dtdn = (J_eq * (2.0 * math.pi / 60.0)) / T_net
@@ -349,6 +358,23 @@ else:
         height=320,
     )
     st.plotly_chart(fig_dt, use_container_width=True)
+
+    # Descripción y luego bloque verde (mismo patrón que Sección 3)
+    with st.expander("Descripción — Sección 4", expanded=False):
+        st.markdown(
+            "Se usa la **potencia al eje** como función del caudal a partir de puntos de operación del TAG; "
+            "se prescinde de la eficiencia explícita y se trabaja con \(P(Q)\) en kW."
+        )
+        st.latex(r"P(Q)=a_0 + a_1\,Q + a_2\,Q^2 + a_3\,Q^3")
+        st.latex(r"Q(n_p) = Q_{\min} + (Q_{\max}-Q_{\min})\,\dfrac{n_p-n_{p,\min}}{n_{p,\max}-n_{p,\min}}")
+        st.latex(r"T_{\rm pump}(n_p)=\dfrac{P(Q(n_p))\cdot 1000}{\omega_p},\quad \omega_p=\dfrac{2\pi n_p}{60},\qquad T_{\rm load,m}=\dfrac{T_{\rm pump}}{r}")
+        st.latex(r"\dot\omega_m=\dfrac{T_{\rm disp}-T_{\rm load,m}}{J_{\rm eq}},\qquad \Delta t=J_{\rm eq}\,\dfrac{\Delta\omega_m}{T_{\rm net}},\qquad \frac{dt}{dn_m}=J_{\rm eq}\,\frac{2\pi}{60}\,\frac{1}{T_{\rm net}}")
+
+    # Bloque verde con el tiempo limitante (hidráulica vs rampa)
+    if t_hyd > t_rampa:
+        pill(f"Tiempo limitante (sección 4): hidráulica = {fmt_num(t_hyd, 's')}")
+    else:
+        pill(f"Tiempo limitante (sección 4): rampa VDF = {fmt_num(t_rampa, 's')}")
 
 st.markdown("---")
 
