@@ -223,7 +223,7 @@ st.markdown("---")
 # =============================================================================
 
 st.markdown("## 3) Tiempo inercial (par disponible vs rampa VDF)")
-rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=600, value=100, step=5)
+rampa_vdf = st.slider("Rampa VDF en el motor [rpm/s]", min_value=10, max_value=600, value=300, step=5)
 
 n_dot_torque = (60.0 / (2.0 * math.pi)) * (t_nom / J_eq)   # rpm/s (par constante en 25–50 Hz)
 t_par   = (n_m_max - n_m_min) / max(n_dot_torque, 1e-9)
@@ -238,7 +238,7 @@ with cC:
     st.markdown(f"- Tiempo por rampa VDF: {val_blue(t_rampa, 's')}", unsafe_allow_html=True)
 
 with st.expander("Descripción — Sección 3"):
-    st.markdown("Hipótesis: par del motor constante \(T_{disp}=T_{nom}\) en 25–50 Hz y pérdidas mecánicas despreciables.")
+    st.markdown("Hipótesis: par del motor constante (Tdisp=Tnom) en 25–50 Hz y pérdidas mecánicas despreciables.")
     st.latex(r"J_{\rm eq}\,\dot\omega_m=T_{\rm disp}\Rightarrow \dot\omega_m=\tfrac{T_{\rm disp}}{J_{\rm eq}}")
     st.latex(r"n_m=\tfrac{60}{2\pi}\,\omega_m\Rightarrow \dot n_m=\tfrac{60}{2\pi}\,\tfrac{T_{\rm disp}}{J_{\rm eq}}")
     st.latex(r"t_{\rm par}=\dfrac{\Delta n_m}{\dot n_m}\qquad t_{\rm rampa}=\dfrac{\Delta n_m}{\text{rampa}}")
