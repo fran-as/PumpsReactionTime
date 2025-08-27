@@ -25,24 +25,28 @@ BLUE  = "#1f77b4"   # Dado (dataset) → azul
 GREEN = "#2ca02c"   # Calculado      → verde
 GRAY  = "#6c757d"
 
-# =============================================================================
-# Utilidades
-# =============================================================================
-
-def dataset_path() -> Path:
-    return Path(__file__).with_name("dataset.csv")
-
-def images_path(name: str) -> Path:
-    return Path(__file__).with_name("images") / name
+# Utilidades ------------------------------------------------------------------
 
 def color_value(text: str, color: str = BLUE, bold: bool = True) -> str:
     w = "600" if bold else "400"
     return f'<span style="color:{color}; font-weight:{w}">{text}</span>'
 
 def fmt_num(x, unit: str = "", ndigits: int = 2) -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+    """Formatea números con coma decimal; si x es texto, lo devuelve tal cual."""
+    # Si es texto, no lo intentes formatear como número
+    if isinstance(x, str):
+        return f"{x} {unit}".strip()
+    # None o NaN/Inf → raya
+    if x is None:
         return "—"
-    s = f"{x:,.{ndigits}f}"
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isnan(xf) or math.isinf(xf):
+        return "—"
+    # Formato numérico con coma decimal
+    s = f"{xf:,.{ndigits}f}"
     s = s.replace(",", "_").replace(".", ",").replace("_", ".")
     return f"{s} {unit}".strip()
 
@@ -52,19 +56,6 @@ def val_blue(x, unit="", ndigits=2) -> str:
 def val_green(x, unit="", ndigits=2) -> str:
     return color_value(fmt_num(x, unit, ndigits), GREEN)
 
-def pill(text: str, bg: str = "#e8f5e9", color: str = "#1b5e20"):
-    st.markdown(
-        f"""
-        <div style="border-left:5px solid {color};
-                    background:{bg};
-                    padding:0.8rem 1rem;
-                    border-radius:0.5rem;
-                    margin-top:0.5rem">
-            <b style="color:{color}">{text}</b>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 # =============================================================================
 # Mapeo de columnas (exactos del dataset)
