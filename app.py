@@ -377,26 +377,3 @@ else:
         pill(f"Tiempo limitante (sección 4): rampa VDF = {fmt_num(t_rampa, 's')}")
 
 st.markdown("---")
-
-# =============================================================================
-# 5) Exportar resultados del TAG
-# =============================================================================
-
-st.markdown("## 5) Exportar resultados del TAG")
-with st.expander("Descargar CSV de resultados para el rango seleccionado"):
-    out = pd.DataFrame({
-        "TAG": tag_sel,
-        "n_p_rpm": n_p_grid,
-        "Q_m3h": Q_grid,
-        "P_kW": P_kW,
-        "T_load_motor_Nm": T_load_m,
-        "T_motor_Nm": T_motor,
-        "n_m_rpm": n_m_grid,
-        "T_net_Nm": T_net,
-    })
-    st.download_button(
-        label="Descargar CSV",
-        data=out.to_csv(index=False, sep=";", decimal=",").encode("utf-8"),
-        file_name=f"{tag_sel}_resultados.csv",
-        mime="text/csv",
-    )
