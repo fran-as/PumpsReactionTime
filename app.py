@@ -12,50 +12,63 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # =============================================================================
-# Configuración general
+# Configuración general + utilidades
 # =============================================================================
+from pathlib import Path  # asegúrate de tener este import arriba
 
 st.set_page_config(
     page_title="Memoria de Cálculo – Tiempo de reacción (VDF)",
     layout="wide",
 )
 
-# Paleta
-BLUE  = "#1f77b4"   # Dado (dataset) → azul
-GREEN = "#2ca02c"   # Calculado      → verde
-GRAY  = "#6c757d"
+# Paleta (dado = azul, calculado = verde)
+BLUE = "#1f77b4"
+GREEN = "#2ca02c"
+GRAY = "#6c757d"
 
-# Utilidades ------------------------------------------------------------------
+# --- Rutas base (corrige NameError de images_path y unifica acceso al dataset)
+APP_DIR = Path(__file__).resolve().parent
 
-def color_value(text: str, color: str = BLUE, bold: bool = True) -> str:
-    w = "600" if bold else "400"
-    return f'<span style="color:{color}; font-weight:{w}">{text}</span>'
+def dataset_path() -> Path:
+    """Ruta absoluta al dataset CSV en el repo."""
+    return APP_DIR / "dataset.csv"
 
+def images_path(name: str) -> Path:
+    """Ruta absoluta a las imágenes del encabezado."""
+    return APP_DIR / "images" / name
+
+# --- Formateo robusto (soporta números y texto; coma decimal para números)
 def fmt_num(x, unit: str = "", ndigits: int = 2) -> str:
-    """Formatea números con coma decimal; si x es texto, lo devuelve tal cual."""
-    # Si es texto, no lo intentes formatear como número
-    if isinstance(x, str):
-        return f"{x} {unit}".strip()
-    # None o NaN/Inf → raya
+    """
+    Si x es numérico -> formatea con coma decimal.
+    Si x es texto -> lo devuelve tal cual (sin intentar formatear a float).
+    """
     if x is None:
         return "—"
-    try:
+    # Números (int/float/np.number)
+    if isinstance(x, (int, float, np.number)):
         xf = float(x)
-    except (TypeError, ValueError):
-        return "—"
-    if math.isnan(xf) or math.isinf(xf):
-        return "—"
-    # Formato numérico con coma decimal
-    s = f"{xf:,.{ndigits}f}"
-    s = s.replace(",", "_").replace(".", ",").replace("_", ".")
-    return f"{s} {unit}".strip()
+        if np.isnan(xf) or np.isinf(xf):
+            return "—"
+        s = f"{xf:,.{ndigits}f}"
+        # Punto por coma (ES): 12,345.67 -> 12.345,67
+        s = s.replace(",", "_").replace(".", ",").replace("_", ".")
+        return f"{s} {unit}".strip()
 
-def val_blue(x, unit="", ndigits=2) -> str:
+    # Cadenas u otros tipos -> solo anexar unidad si aplica
+    return f"{str(x)} {unit}".strip()
+
+def color_value(text: str, color: str = BLUE, bold: bool = True) -> str:
+    weight = "600" if bold else "400"
+    return f"<span style='color:{color}; font-weight:{weight}'>{text}</span>"
+
+def val_blue(x, unit: str = "", ndigits: int = 2) -> str:
+    """Valor de entrada (dataset) en azul."""
     return color_value(fmt_num(x, unit, ndigits), BLUE)
 
-def val_green(x, unit="", ndigits=2) -> str:
+def val_green(x, unit: str = "", ndigits: int = 2) -> str:
+    """Valor calculado en verde."""
     return color_value(fmt_num(x, unit, ndigits), GREEN)
-
 
 # =============================================================================
 # Mapeo de columnas (exactos del dataset)
